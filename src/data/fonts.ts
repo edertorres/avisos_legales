@@ -18,6 +18,16 @@ export const FONT_OPTIONS: FontOption[] = [
     shortName: 'Asap',
   },
   {
+    value: 'Barlow Condensed, sans-serif',
+    label: 'Barlow Condensed (Condensada)',
+    shortName: 'Barlow Condensed',
+  },
+  {
+    value: 'Barlow Semi Condensed, sans-serif',
+    label: 'Barlow Semi Condensed (Semi Condensada)',
+    shortName: 'Barlow Semi Condensed',
+  },
+  {
     value: 'Arimo, sans-serif',
     label: 'Arimo / Myriad Pro (Sans)',
     shortName: 'Arimo',

@@ -10,6 +10,8 @@ export type FontFamily =
   | 'PT Sans, sans-serif'
   | 'Asap, sans-serif'
   | 'Arimo, sans-serif'
+  | 'Barlow Condensed, sans-serif'
+  | 'Barlow Semi Condensed, sans-serif'
   | 'Roboto Condensed, sans-serif'
   | 'Roboto, sans-serif'
   | 'Lato, sans-serif'

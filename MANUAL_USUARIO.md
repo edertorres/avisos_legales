@@ -106,11 +106,25 @@ Sobre el lienzo hay una barra de atributos rapidos:
 - **Auto-Encajar**: ajusta automaticamente la fuente para evitar desborde.
 - **Guia 3 mm**: muestra u oculta la guia visual de margen.
 
+Fuentes disponibles:
+
+- Roboto Condensed.
+- Asap.
+- Barlow Condensed.
+- Barlow Semi Condensed.
+- PT Sans.
+- Arimo.
+- Roboto.
+- Lato.
+- Tinos.
+- Lora.
+- Courier Prime.
+
 El control **Inter** es util cuando el texto casi cabe: reducirlo ligeramente puede evitar un desborde sin bajar demasiado la letra.
 
 ## Vista Previa
 
-La vista previa usa el mismo motor Typst CLI que genera el PDF final. Por eso debe coincidir con la salida exportada.
+La vista previa usa el mismo render HTML/CSS que genera el PDF final. Por eso debe coincidir con la salida exportada.
 
 Debajo del aviso se muestran indicadores visibles:
 

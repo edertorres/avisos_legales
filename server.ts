@@ -521,6 +521,8 @@ function renderBodyHtml(
 }
 
 function getBoldFontList(fontFamily: string): string {
+  if (fontFamily.includes('Barlow Semi Condensed')) return '"Barlow Semi Condensed", "Barlow Condensed", "Roboto Condensed", "Roboto", "Arimo", sans-serif';
+  if (fontFamily.includes('Barlow Condensed')) return '"Barlow Condensed", "Roboto Condensed", "Roboto", "Arimo", sans-serif';
   if (fontFamily.includes('Roboto Condensed') || fontFamily.includes('Narrow')) return '"Roboto Condensed", "Roboto", "Arimo", "Noto Sans", sans-serif';
   if (fontFamily.includes('Tinos') || fontFamily.includes('Times')) return '"Tinos", "Liberation Serif", "Noto Serif", serif';
   if (fontFamily.includes('Lora') || fontFamily.includes('Georgia')) return '"Noto Serif", "Liberation Serif", "Tinos", serif';
