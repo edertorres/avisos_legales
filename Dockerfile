@@ -2,9 +2,12 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
+    chromium \
     curl \
     fontconfig \
     fonts-croscore \
@@ -28,6 +31,7 @@ RUN npm run build
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3000
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 EXPOSE 3000
 
