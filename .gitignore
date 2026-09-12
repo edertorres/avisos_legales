@@ -1,0 +1,12 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+out_*.svg
+test_*.svg
+weasyprint_test.pdf
+*_test.pdf
