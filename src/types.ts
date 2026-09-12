@@ -8,6 +8,7 @@ export interface SizeOption {
 
 export type FontFamily =
   | 'PT Sans, sans-serif'
+  | 'Asap, sans-serif'
   | 'Arimo, sans-serif'
   | 'Roboto Condensed, sans-serif'
   | 'Roboto, sans-serif'

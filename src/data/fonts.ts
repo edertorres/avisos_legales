@@ -13,6 +13,11 @@ export const FONT_OPTIONS: FontOption[] = [
     shortName: 'PT Sans',
   },
   {
+    value: 'Asap, sans-serif',
+    label: 'Asap (Sans Condensada)',
+    shortName: 'Asap',
+  },
+  {
     value: 'Arimo, sans-serif',
     label: 'Arimo / Myriad Pro (Sans)',
     shortName: 'Arimo',

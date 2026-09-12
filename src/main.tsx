@@ -1,6 +1,8 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import '@fontsource/asap/400.css';
+import '@fontsource/asap/700.css';
 import '@fontsource/roboto-condensed/400.css';
 import '@fontsource/roboto-condensed/700.css';
 import './index.css';
