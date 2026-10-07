@@ -39,3 +39,29 @@ For Coolify, use the included `Dockerfile`. Configure the public domain as:
 
 The Docker image installs Typst CLI, Ghostscript, WeasyPrint and the system fonts used by the PDF renderer
 (`Roboto`, `Lato`, `Arimo`, `Tinos`, `Liberation` and `Noto` fallbacks).
+
+
+## Guardado compartido
+
+Los anuncios guardados y el historial de los últimos 200 PDFs se conservan en el servidor,
+en `DATA_DIR/shared-library.json` (por defecto, `./data`). Todos los PCs que abran la misma
+instancia de la aplicación comparten estos datos. El historial conserva el contenido del aviso
+para volver a cargarlo y generar su PDF; los archivos PDF descargados siguen en cada PC.
+Los tamaños personalizados siguen guardándose en cada navegador.
+
+En Coolify, agrega almacenamiento persistente con destino **`/app/data`** y mantén
+`DATA_DIR=/app/data`. Este volumen debe conservarse al actualizar o recrear el contenedor.
+Sin ese montaje, los datos del contenedor pueden perderse al volver a desplegar.
+Haz copias de seguridad de `shared-library.json`.
+
+Esta implementación usa una sola instancia/proceso del servidor; no configures varias
+réplicas escribiendo en el mismo archivo. Si se necesitan varias réplicas, usa una base de datos compartida.
+
+Al abrir la aplicación, los avisos y el historial existentes en ese navegador se migran
+sin duplicar IDs ni sobrescribir datos compartidos. La copia local se retira solo tras
+confirmación del servidor. Abre la aplicación en cada navegador que tenga datos antiguos
+para migrarlos. Las listas se actualizan al abrirlas, al volver a la ventana y cada 15 segundos.
+Si el servidor no está disponible, se informa el error y no se confirma un guardado que falló.
+Todos los usuarios con acceso a la aplicación pueden consultar y eliminar datos compartidos.
+
+Validación: `npm run lint`, `npm test` y `npm run build`.

@@ -1,3 +1,6 @@
+import { SharedLibraryStore } from './sharedLibraryStore';
+import { isSavedNotice, isGeneratedLogEntry } from './src/types/sharedLibrary';
+import { parseFormattedText, FormattedText } from './src/utils/textFormatting';
 import express from 'express';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -476,25 +479,14 @@ function renderBodyHtml(
   let match: RegExpExecArray | null;
 
   const renderTextChunk = (chunk: string) => {
-    const alignRe = /\[(left|center|right|justify)\]([\s\S]*?)\[\/\1\]/gi;
-    let chunkHtml = '';
-    let chunkLastIndex = 0;
-    let alignMatch: RegExpExecArray | null;
-
-    while ((alignMatch = alignRe.exec(chunk)) !== null) {
-      if (alignMatch.index > chunkLastIndex) {
-        chunkHtml += renderInlineHtml(chunk.slice(chunkLastIndex, alignMatch.index), boldKeywords);
-      }
-      const align = alignMatch[1].toLowerCase();
-      chunkHtml += `<span class="align-block align-${align}">${renderInlineHtml(alignMatch[2], boldKeywords)}</span>`;
-      chunkLastIndex = alignMatch.index + alignMatch[0].length;
-    }
-
-    if (chunkLastIndex < chunk.length) {
-      chunkHtml += renderInlineHtml(chunk.slice(chunkLastIndex), boldKeywords);
-    }
-
-    return chunkHtml;
+    const renderNodes = (nodes: FormattedText[]): string => nodes.map((node) => {
+      if (node.type === 'text') return renderInlineHtml(node.value, boldKeywords);
+      const content = renderNodes(node.children);
+      if (node.type === 'bold') return `<strong>${content}</strong>`;
+      if (node.type === 'underline') return `<u>${content}</u>`;
+      return `<span class="align-block align-${node.align}">${content}</span>`;
+    }).join('');
+    return renderNodes(parseFormattedText(chunk));
   };
 
   while ((match = blockRe.exec(value)) !== null) {
@@ -951,6 +943,36 @@ async function startServer() {
   const host = process.env.HOST || '0.0.0.0';
 
   app.use(express.json({ limit: '25mb' }));
+
+  const library = new SharedLibraryStore(path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data')));
+  const libraryRoute = (action: (req: express.Request) => Promise<unknown>): express.RequestHandler =>
+    async (req, res) => {
+      res.set('Cache-Control', 'no-store');
+      try { res.json(await action(req)); }
+      catch (error) {
+        console.error('Shared library error:', error);
+        res.status(500).json({ error: 'No se pudo acceder al guardado compartido. Intenta nuevamente.' });
+      }
+    };
+  app.get('/api/library', libraryRoute(() => library.get()));
+  app.post('/api/library/notices', (req, res, next) => {
+    if (!isSavedNotice(req.body)) { res.status(400).json({ error: 'Anuncio inválido.' }); return; }
+    next();
+  }, libraryRoute(req => library.addNotice(req.body)));
+  app.delete('/api/library/notices/:id', libraryRoute(req => library.deleteNotice(String(req.params.id))));
+  app.post('/api/library/history', (req, res, next) => {
+    if (!isGeneratedLogEntry(req.body)) { res.status(400).json({ error: 'Registro inválido.' }); return; }
+    next();
+  }, libraryRoute(req => library.addLog(req.body)));
+  app.delete('/api/library/history', libraryRoute(() => library.clearLog()));
+  app.post('/api/library/migrate', (req, res, next) => {
+    if (!Array.isArray(req.body?.savedNotices) || !req.body.savedNotices.every(isSavedNotice)
+      || !Array.isArray(req.body?.generatedLog) || !req.body.generatedLog.every(isGeneratedLogEntry)) {
+      res.status(400).json({ error: 'Datos locales inválidos.' }); return;
+    }
+    next();
+  }, libraryRoute(req => library.migrate(req.body)));
+
 
   app.post('/api/pdf/analyze-print-risk', express.raw({ type: ['application/pdf', 'application/octet-stream'], limit: '100mb' }), (req, res) => {
     try {

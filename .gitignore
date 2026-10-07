@@ -10,3 +10,5 @@ out_*.svg
 test_*.svg
 weasyprint_test.pdf
 *_test.pdf
+
+data/

@@ -1,3 +1,4 @@
+import { parseFormattedText, FormattedText } from '../utils/textFormatting';
 import React, { useRef, useEffect, useCallback } from 'react';
 import { BodyImage, NoticeConfig, OverflowStatus } from '../types';
 
@@ -200,44 +201,25 @@ function parseBodyText(
   if (!text) return [];
 
   const renderTextChunk = (chunk: string, keyPrefix: string): React.ReactNode[] => {
-    const alignRe = /\[(left|center|right|justify)\]([\s\S]*?)\[\/\1\]/gi;
-    const parts: React.ReactNode[] = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = alignRe.exec(chunk)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push(
-          <span key={`${keyPrefix}-pre-${lastIndex}`}>
-            {renderInlineBold(chunk.slice(lastIndex, match.index), boldKeywords, fontFamily)}
-          </span>,
-        );
-      }
-      const align = match[1].toLowerCase();
-      const content = match[2];
-      parts.push(
-        <span
-          key={`${keyPrefix}-align-${match.index}`}
-          style={{
-            display: 'block',
-            textAlign: align as React.CSSProperties['textAlign'],
-          }}
-        >
-          {renderInlineBold(content, boldKeywords, fontFamily)}
-        </span>,
-      );
-      lastIndex = match.index + match[0].length;
-    }
-
-    if (lastIndex < chunk.length) {
-      parts.push(
-        <span key={`${keyPrefix}-post-${lastIndex}`}>
-          {renderInlineBold(chunk.slice(lastIndex), boldKeywords, fontFamily)}
-        </span>,
-      );
-    }
-
-    return parts;
+    const renderNodes = (nodes: FormattedText[], prefix: string): React.ReactNode[] =>
+      nodes.map((node, index) => {
+        const key = `${prefix}-${index}`;
+        if (node.type === 'text') {
+          return <React.Fragment key={key}>{renderInlineBold(node.value, boldKeywords, fontFamily)}</React.Fragment>;
+        }
+        if (node.type === 'underline') {
+          return <u key={key}>{renderNodes(node.children, key)}</u>;
+        }
+        if (node.type === 'bold') {
+          return <strong key={key} style={{ fontFamily: getBoldFontList(fontFamily), fontWeight: 700 }}>
+            {renderNodes(node.children, key)}
+          </strong>;
+        }
+        return <span key={key} style={{ display: 'block', textAlign: node.align }}>
+          {renderNodes(node.children, key)}
+        </span>;
+      });
+    return renderNodes(parseFormattedText(chunk), keyPrefix);
   };
 
   const blockRe = /##table[ \t]*\r?\n([\s\S]*?)##\/table|##image:([A-Za-z0-9_-]+)|##imagen:(\d+)/g;

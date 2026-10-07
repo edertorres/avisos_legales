@@ -16,6 +16,7 @@ import {
   Sliders,
   Sparkles,
   Bold,
+  Underline,
   Plus,
   Minus,
   Trash2,
@@ -203,8 +204,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     }
   };
 
-  // Add bold formatting around selected text
-  const applyBoldToSelection = () => {
+  // Wrap the selection while keeping it selected for additional formatting.
+  const applyInlineFormatToSelection = (format: 'bold' | 'underline') => {
     if (!bodyTextareaRef.current) return;
     const textarea = bodyTextareaRef.current;
     const start = textarea.selectionStart;
@@ -215,13 +216,15 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
     const before = config.bodyText.substring(0, start);
     const after = config.bodyText.substring(end);
-    const newText = `${before}**${selected}**${after}`;
+    const opening = format === 'bold' ? '**' : '[u]';
+    const closing = format === 'bold' ? '**' : '[/u]';
+    const newText = `${before}${opening}${selected}${closing}${after}`;
 
     onChange({ bodyText: newText });
 
     setTimeout(() => {
       textarea.focus();
-      textarea.setSelectionRange(start + 2, end + 2);
+      textarea.setSelectionRange(start + opening.length, end + opening.length);
     }, 0);
   };
 
@@ -769,6 +772,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                   <span className="text-xs text-slate-600 font-extrabold px-1 uppercase">Alinear Sel</span>
                   <button
                     type="button"
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => applyAlignmentToSelection('left')}
                     className="p-1.5 hover:bg-white text-slate-700 rounded transition-colors"
                     title="Alinear selección a la izquierda [left]"
@@ -777,6 +781,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                   </button>
                   <button
                     type="button"
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => applyAlignmentToSelection('center')}
                     className="p-1.5 hover:bg-white text-slate-700 rounded transition-colors"
                     title="Centrar selección [center]"
@@ -785,6 +790,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                   </button>
                   <button
                     type="button"
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => applyAlignmentToSelection('right')}
                     className="p-1.5 hover:bg-white text-slate-700 rounded transition-colors"
                     title="Alinear selección a la derecha [right]"
@@ -793,6 +799,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                   </button>
                   <button
                     type="button"
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => applyAlignmentToSelection('justify')}
                     className="p-1.5 hover:bg-white text-slate-700 rounded transition-colors"
                     title="Justificar selección [justify]"
@@ -813,12 +820,24 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
                 <button
                   type="button"
-                  onClick={applyBoldToSelection}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => applyInlineFormatToSelection('bold')}
                   className="px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1 border border-slate-300"
                   title="Formatear selección en negrita"
                 >
                   <Bold className="w-3 h-3" />
                   <span className="text-[11px]">Negrita</span>
+                </button>
+
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => applyInlineFormatToSelection('underline')}
+                  className="px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1 border border-slate-300"
+                  title="Subrayar selección"
+                >
+                  <Underline className="w-3 h-3" />
+                  <span className="text-[11px]">Subrayado</span>
                 </button>
 
                 <button

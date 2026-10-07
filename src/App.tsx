@@ -1,3 +1,5 @@
+import { isNoticeConfig, type SavedNotice, type GeneratedLogEntry, type SharedLibrary } from './types/sharedLibrary';
+import { requestSharedLibrary, loadAndMigrateLibrary } from './utils/sharedLibraryClient';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { NoticeConfig, SizeOption, OverflowStatus } from './types';
 import { INITIAL_SIZES, SAMPLE_NOTICE_IMAGE, DEFAULT_NOTICE_CONFIG } from './data/samples';
@@ -15,23 +17,6 @@ interface PrintRiskAnalysis {
   recommendedMode: 'preserve' | 'flatten';
 }
 
-interface SavedNotice {
-  id: string;
-  name: string;
-  config: NoticeConfig;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface GeneratedLogEntry {
-  id: string;
-  generatedAt: string;
-  title: string;
-  filename: string;
-  exportType: 'single-exact';
-  config: NoticeConfig;
-}
-
 interface NoticeJsonPayload {
   schemaVersion: 1;
   exportedAt: string;
@@ -42,23 +27,7 @@ interface NoticeJsonPayload {
   customSizes: SizeOption[];
 }
 
-const SAVED_NOTICES_KEY = 'avisos.savedNotices.v1';
 const CUSTOM_SIZES_KEY = 'avisos.customSizes.v1';
-const GENERATED_LOG_KEY = 'avisos.generatedLog.v1';
-const GENERATED_LOG_LIMIT = 200;
-
-function isNoticeConfig(value: unknown): value is NoticeConfig {
-  if (!value || typeof value !== 'object') return false;
-  const config = value as Partial<NoticeConfig>;
-  return (
-    typeof config.headerTitle === 'string' &&
-    typeof config.subheaderTitle === 'string' &&
-    typeof config.bodyText === 'string' &&
-    !!config.size &&
-    typeof config.size.widthCm === 'number' &&
-    typeof config.size.heightCm === 'number'
-  );
-}
 
 function filenameSafeName(value: string): string {
   return value
@@ -117,25 +86,68 @@ export default function App() {
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const noticeJsonInputRef = useRef<HTMLInputElement>(null);
+  const libraryInitialization = useRef<Promise<SharedLibrary> | null>(null);
+  const libraryRequestNumber = useRef(0);
+  const libraryWrites = useRef(0);
+  const libraryMutationQueue = useRef<Promise<unknown>>(Promise.resolve());
+
+  const applySharedLibrary = (library: SharedLibrary) => {
+    setSavedNotices(library.savedNotices);
+    setGeneratedLog(library.generatedLog);
+  };
+
+  const initializeLibrary = () => {
+    if (!libraryInitialization.current) {
+      libraryInitialization.current = loadAndMigrateLibrary().catch(error => {
+        libraryInitialization.current = null;
+        throw error;
+      });
+    }
+    return libraryInitialization.current;
+  };
+
+  const mutateLibrary = (endpoint: string, method: string, body?: unknown) => {
+    libraryWrites.current += 1;
+    libraryRequestNumber.current += 1;
+    const operation = libraryMutationQueue.current.then(async () => {
+      await initializeLibrary();
+      const library = await requestSharedLibrary(endpoint, method, body);
+      applySharedLibrary(library);
+    }).finally(() => { libraryWrites.current -= 1; });
+    libraryMutationQueue.current = operation.catch(() => undefined);
+    return operation;
+  };
+
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      if (libraryWrites.current > 0) return;
+      const requestNumber = ++libraryRequestNumber.current;
+      try {
+        await initializeLibrary();
+        const library = await requestSharedLibrary();
+        if (active && requestNumber === libraryRequestNumber.current) applySharedLibrary(library);
+      } catch (error) {
+        if (active) showToast(error instanceof Error ? error.message : 'No se pudo cargar la biblioteca compartida.');
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { if (!document.hidden) void refresh(); }, 15000);
+    window.addEventListener('focus', refresh);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus', refresh); };
+  }, []);
+
+  useEffect(() => {
+    if (!isSavedNoticesOpen && !isGeneratedLogOpen) return;
+    const requestNumber = ++libraryRequestNumber.current;
+    if (libraryWrites.current > 0) return;
+    void initializeLibrary().then(() => requestSharedLibrary()).then(library => {
+      if (requestNumber === libraryRequestNumber.current) applySharedLibrary(library);
+    }).catch(error => showToast(error.message));
+  }, [isSavedNoticesOpen, isGeneratedLogOpen]);
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(SAVED_NOTICES_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          setSavedNotices(parsed.filter((item) => item && isNoticeConfig(item.config)));
-        }
-      }
-
-      const rawGeneratedLog = localStorage.getItem(GENERATED_LOG_KEY);
-      if (rawGeneratedLog) {
-        const parsedGeneratedLog = JSON.parse(rawGeneratedLog);
-        if (Array.isArray(parsedGeneratedLog)) {
-          setGeneratedLog(parsedGeneratedLog.filter((item) => item && isNoticeConfig(item.config)));
-        }
-      }
-
       const rawSizes = localStorage.getItem(CUSTOM_SIZES_KEY);
       if (!rawSizes) return;
 
@@ -144,7 +156,7 @@ export default function App() {
         setSizes(mergeSizes(INITIAL_SIZES, parsedSizes.filter(isSizeOption).map((size) => ({ ...size, isCustom: true }))));
       }
     } catch (err) {
-      console.warn('Saved notices/custom sizes load error:', err);
+      console.warn('Custom sizes load error:', err);
     }
   }, []);
 
@@ -191,17 +203,6 @@ export default function App() {
     setConfig((prev) => ({ ...prev, ...updated }));
   };
 
-  const persistSavedNotices = (nextNotices: SavedNotice[]) => {
-    setSavedNotices(nextNotices);
-    localStorage.setItem(SAVED_NOTICES_KEY, JSON.stringify(nextNotices));
-  };
-
-  const persistGeneratedLog = (nextLog: GeneratedLogEntry[]) => {
-    const limitedLog = nextLog.slice(0, GENERATED_LOG_LIMIT);
-    setGeneratedLog(limitedLog);
-    localStorage.setItem(GENERATED_LOG_KEY, JSON.stringify(limitedLog));
-  };
-
   const persistCustomSizes = (nextSizes: SizeOption[]) => {
     const nextCustomSizes = nextSizes.filter((size) => size.isCustom);
     localStorage.setItem(CUSTOM_SIZES_KEY, JSON.stringify(nextCustomSizes));
@@ -228,9 +229,9 @@ export default function App() {
     return noticeConfig.headerTitle.trim() || noticeConfig.subheaderTitle.trim() || 'Aviso sin título';
   };
 
-  const registerGeneratedNotice = (filename: string) => {
+  const registerGeneratedNotice = async (filename: string) => {
     const entry: GeneratedLogEntry = {
-      id: `generated-${Date.now()}`,
+      id: `generated-${crypto.randomUUID()}`,
       generatedAt: new Date().toISOString(),
       title: getLogTitle(config),
       filename,
@@ -238,24 +239,32 @@ export default function App() {
       config,
     };
 
-    persistGeneratedLog([entry, ...generatedLog]);
+    try {
+      await mutateLibrary('/history', 'POST', entry);
+      return true;
+    } catch {
+      showToast('PDF descargado, pero no se pudo guardar en el historial compartido.');
+      return false;
+    }
   };
 
-  const handleSaveNotice = () => {
+  const handleSaveNotice = async () => {
     const name = window.prompt('Nombre para guardar este anuncio:', getSuggestedNoticeName());
-    if (!name) return;
+    if (!name?.trim()) return;
 
     const now = new Date().toISOString();
     const savedNotice: SavedNotice = {
-      id: `notice-${Date.now()}`,
+      id: `notice-${crypto.randomUUID()}`,
       name: name.trim(),
       config,
       createdAt: now,
       updatedAt: now,
     };
 
-    persistSavedNotices([savedNotice, ...savedNotices]);
-    showToast('Anuncio guardado en este navegador.');
+    try {
+      await mutateLibrary('/notices', 'POST', savedNotice);
+      showToast('Anuncio guardado para todos.');
+    } catch (error) { showToast((error as Error).message); }
   };
 
   const handleLoadSavedNotice = (savedNotice: SavedNotice) => {
@@ -265,10 +274,12 @@ export default function App() {
     showToast(`Anuncio cargado: ${savedNotice.name}`);
   };
 
-  const handleDeleteSavedNotice = (id: string) => {
-    if (!window.confirm('¿Eliminar este anuncio guardado?')) return;
-    persistSavedNotices(savedNotices.filter((notice) => notice.id !== id));
-    showToast('Anuncio eliminado.');
+  const handleDeleteSavedNotice = async (id: string) => {
+    if (!window.confirm('¿Eliminar este anuncio guardado para todos?')) return;
+    try {
+      await mutateLibrary(`/notices/${encodeURIComponent(id)}`, 'DELETE');
+      showToast('Anuncio eliminado para todos.');
+    } catch (error) { showToast((error as Error).message); }
   };
 
   const handleLoadGeneratedLogEntry = (entry: GeneratedLogEntry) => {
@@ -313,20 +324,22 @@ export default function App() {
     showToast('Historial exportado como CSV.');
   };
 
-  const handleClearGeneratedLog = () => {
+  const handleClearGeneratedLog = async () => {
     if (generatedLog.length === 0) {
       showToast('No hay historial para borrar.');
       return;
     }
 
-    const confirmation = window.prompt('Escribe "borrar" para eliminar todo el historial de PDFs:');
+    const confirmation = window.prompt('Escribe "borrar" para eliminar el historial compartido de PDFs para todos:');
     if (confirmation !== 'borrar') {
       showToast('No se borró el historial.');
       return;
     }
 
-    persistGeneratedLog([]);
-    showToast('Historial borrado.');
+    try {
+      await mutateLibrary('/history', 'DELETE');
+      showToast('Historial compartido borrado.');
+    } catch (error) { showToast((error as Error).message); }
   };
 
   const handleExportNoticeJson = (noticeToExport?: SavedNotice) => {
@@ -595,8 +608,7 @@ export default function App() {
         filename,
       });
 
-      registerGeneratedNotice(filename);
-      showToast('¡PDF generado y descargado con éxito!');
+      if (await registerGeneratedNotice(filename)) showToast('¡PDF generado y descargado con éxito!');
     } catch (err) {
       console.error('PDF export error:', err);
       const message = err instanceof Error ? err.message : 'Por favor reintenta.';
@@ -624,8 +636,7 @@ export default function App() {
         filename,
       });
 
-      registerGeneratedNotice(filename);
-      showToast('PDF WeasyPrint generado y descargado.');
+      if (await registerGeneratedNotice(filename)) showToast('PDF WeasyPrint generado y descargado.');
     } catch (err) {
       console.error('WeasyPrint PDF export error:', err);
       const message = err instanceof Error ? err.message : 'Por favor reintenta.';
@@ -758,7 +769,7 @@ export default function App() {
                 <FileText className="h-5 w-5 text-emerald-300" />
                 <div>
                   <h2 className="text-sm font-extrabold uppercase tracking-wide">Anuncios Guardados</h2>
-                  <p className="text-xs text-slate-300">Guardado local en este navegador</p>
+                  <p className="text-xs text-slate-300">Biblioteca compartida para todos</p>
                 </div>
               </div>
               <button
@@ -774,7 +785,7 @@ export default function App() {
               {savedNotices.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
                   <p className="text-sm font-bold text-slate-800">Aún no hay anuncios guardados.</p>
-                  <p className="mt-1 text-xs text-slate-500">Usa Guardar para conservar el anuncio actual en este navegador.</p>
+                  <p className="mt-1 text-xs text-slate-500">Usa Guardar para conservar el anuncio actual y acceder desde cualquier PC.</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -851,7 +862,7 @@ export default function App() {
                 <FileText className="h-5 w-5 text-emerald-300" />
                 <div>
                   <h2 className="text-sm font-extrabold uppercase tracking-wide">Historial de PDFs</h2>
-                  <p className="text-xs text-slate-300">Registro automático local de avisos generados</p>
+                  <p className="text-xs text-slate-300">Registro compartido de avisos generados</p>
                 </div>
               </div>
               <button

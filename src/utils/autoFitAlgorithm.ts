@@ -108,13 +108,13 @@ function createMeasurementElement(config: NoticeConfig): { el: HTMLDivElement; c
 }
 
 /**
- * Strip markdown **bold** and alignment tags for measurement purposes.
+ * Strip bold, underline and alignment tags for measurement purposes.
  */
 function stripFormatting(text: string): string {
   return text
     .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/\[(left|center|right|justify)\]/gi, '')
-    .replace(/\[\/(left|center|right|justify)\]/gi, '');
+    .replace(/\[(left|center|right|justify|u)\]/gi, '')
+    .replace(/\[\/(left|center|right|justify|u)\]/gi, '');
 }
 
 /**

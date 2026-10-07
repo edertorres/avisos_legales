@@ -43,6 +43,7 @@ Controles disponibles:
 
 - **Sin Retornos**: elimina saltos de linea innecesarios para que el texto fluya como parrafo continuo.
 - **Negrita**: aplica negrita al texto seleccionado.
+- **Subrayado**: subraya el texto seleccionado. Puede combinarse con negrita y alineación en cualquier orden; se conserva en la vista previa y el PDF.
 - **Resaltar Nombres**: detecta nombres, empresas, NIT, cedulas y documentos para resaltarlos automaticamente.
 - **Limpiar**: elimina los resaltados automaticos.
 - **.TXT**: permite importar un archivo de texto plano.
@@ -195,3 +196,19 @@ Si aparecen etiquetas como `[center]`, vuelve a seleccionar el texto y aplica la
 ### El texto se parte raro alrededor del logo
 
 Reduce un poco el ancho del logo, cambia su posicion o ajusta el interlineado. La aplicacion protege frases legales comunes para evitar cortes no naturales.
+
+
+## Anuncios guardados e historial compartido
+
+**Guardar** conserva el anuncio en el servidor para que todos puedan cargarlo desde otro PC,
+siempre que abran la misma aplicación. Al guardar se incluyen el texto, el formato, el logo
+y las imágenes insertadas. El historial registra los últimos 200 PDFs generados y permite
+volver a cargar sus avisos; no almacena el archivo PDF descargado.
+
+Los datos que antes estaban en cada navegador se migran automáticamente al abrir la aplicación.
+Para reunir los datos de varios PCs, abre la aplicación actualizada en cada navegador de origen.
+Las listas se actualizan al abrirlas, al volver a la ventana y cada 15 segundos.
+Eliminar un anuncio o borrar el historial afecta a todos los usuarios.
+Los tamaños personalizados continúan siendo locales.
+
+El servidor debe tener almacenamiento persistente configurado como se indica en el README.
