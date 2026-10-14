@@ -61,6 +61,8 @@ export interface NoticeConfig {
   subheaderTitle: string;
   bodyText: string;
   logoUrl: string | null;
+  originalLogoUrl?: string;
+  logoCrop?: import('./utils/logoCrop').CropRect;
   logoWidthMm: number; // logo width in mm
   size: SizeOption;
   marginMm: number; // Margin in mm (default 3mm)

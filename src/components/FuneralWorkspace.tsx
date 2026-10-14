@@ -6,8 +6,11 @@ import { SavedNotice } from '../types/sharedLibrary';
 import { DEFAULT_NOTICE_CONFIG } from '../data/samples';
 import { FONT_OPTIONS } from '../data/fonts';
 import { NoticeCanvas } from './NoticeCanvas';
+import { LogoCropEditor } from './LogoCropEditor';
 import { funeralConfigForRow, resolveFuneralLogo, logoResolutionLabel, type FuneralLogo } from '../utils/funeralLogos';
 import { readFuneralFile, rowsToNotices, FuneralRow } from '../utils/funeralImport';
+import { generateNoticePDF } from '../utils/pdfGenerator';
+import { individualFuneralFilename } from '../utils/funeralFilenames';
 
 const initial: NoticeConfig = {
   ...DEFAULT_NOTICE_CONFIG, noticeType: 'funeral', marginMm: 2, borderWidthPx: 0.3333,
@@ -33,6 +36,7 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
   const [design, setDesign] = useState(initial);
   const [rows, setRows] = useState<FuneralRow[]>([emptyRow()]);
   const [selected, setSelected] = useState(0);
+  const [cropEditing, setCropEditing] = useState(false);
   const [reviewed, setReviewed] = useState<number[]>([]);
   const [importRows, setImportRows] = useState<string[][] | null>(null);
   const [hasHeader, setHasHeader] = useState(true);
@@ -73,7 +77,7 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
   const changeDesign = (changes: Partial<NoticeConfig>) => { setDesign(prev => ({ ...prev, ...changes })); setReviewed([]); setOverflow(null); };
   const changeFuneral = (changes: Partial<FuneralDesign>) => changeDesign({ funeral: { ...design.funeral!, ...changes } });
   const changeRow = (index: number, changes: Partial<FuneralRow>) => {
-    setRows(prev => prev.map((row, i) => i === index ? { ...row, ...changes } : row));
+    setRows(prev => prev.map((row, i) => i === index ? { ...row, ...(changes.logoFile !== undefined && changes.logoFile !== row.logoFile ? { croppedLogoUrl: undefined, logoCrop: undefined } : {}), ...changes } : row));
     setReviewed(prev => prev.filter(i => i !== index)); setOverflow(null);
   };
   const logoStates = rows.map(row => resolveFuneralLogo(row, logos));
@@ -82,6 +86,7 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
   const invalid = rows.some(row => !row.deceased.trim()) || unresolvedLogos > 0;
 
   function invalidateLogos(names: string[]) {
+    setRows(prev => prev.map(row => names.includes(row.logoFile?.trim() || '') ? { ...row, croppedLogoUrl: undefined, logoCrop: undefined } : row));
     setReviewed(prev => prev.filter(index => !names.includes(rows[index]?.logoFile?.trim() || '')));
     setOverflow(null);
   }
@@ -133,8 +138,16 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
   }
   async function exportBatch(mode: 'combined' | 'individual') {
     if (invalid || reviewed.length !== rows.length) { setMessage('Completa el nombre del fallecido, resuelve los logos y revisa todos los avisos.', true); return; }
-    setBusy(true); setMessage('Generando el lote…');
+    setBusy(true); setMessage(rows.length === 1 && mode === 'combined' ? 'Generando el aviso…' : 'Generando el lote…');
     try {
+      if (rows.length === 1 && mode === 'combined') {
+        await generateNoticePDF({
+          config, widthCm: config.size.widthCm, heightCm: config.size.heightCm,
+          filename: individualFuneralFilename(rows[0].payer, 0, new Set(), rows[0].logoFile),
+        });
+        setMessage('Aviso generado y descargado.');
+        return;
+      }
       const response = await fetch('/api/pdf/funeral-batch', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ design: { ...design, logoUrl: null }, rows, mode, logos: logos.filter(logo => rows.some(row => row.logoFile?.trim() === logo.name)).map(({ name, dataUrl }) => ({ name, dataUrl })) }),
@@ -304,17 +317,22 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
         <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm"><input type="checkbox" disabled={busy} checked={rows[selected].crossEnabled === true} onChange={e => changeRow(selected, { crossEnabled: e.target.checked })} />Incluir cruz en este aviso</label>
         <label className="block text-sm">Anunciante (opcional)<input className={field} disabled={busy} value={rows[selected].payer} onChange={e => changeRow(selected, { payer: e.target.value })} /></label>
         <label className="block text-sm">Fallecido (obligatorio)<input aria-required="true" className={field} disabled={busy} value={rows[selected].deceased} onChange={e => changeRow(selected, { deceased: e.target.value })} /></label>
-        <details open={currentLogo.status === 'missing' || currentLogo.status === 'duplicate'} className="rounded-lg border border-slate-200 bg-slate-50">
-          <summary className="cursor-pointer px-3 py-2 text-xs font-bold">Logo de este aviso · {logoResolutionLabel(currentLogo.status)}{rows[selected].logoFile ? ` · ${rows[selected].logoFile}` : ''}</summary>
+        <section aria-label="Logo de este aviso" className="rounded-lg border border-slate-200 bg-slate-50">
+          <h3 className="px-3 py-2 text-xs font-bold">Logo de este aviso · {logoResolutionLabel(currentLogo.status)}{rows[selected].logoFile ? ` · ${rows[selected].logoFile}` : ''}</h3>
         <fieldset disabled={busy} className="space-y-2 border-t border-slate-200 p-3">
           <label className="block text-sm">Archivo de logo del anunciante<input className={field} list="funeral-logo-files" placeholder="empresa-abc.png (vacío: sin logo)" value={rows[selected].logoFile || ''} onChange={e => changeRow(selected, { logoFile: e.target.value })} /></label>
           <datalist id="funeral-logo-files">{[...new Set(logos.map(logo => logo.name))].map(name => <option key={name} value={name} />)}</datalist>
           <p role="status" className={`text-sm ${currentLogo.status === 'missing' || currentLogo.status === 'duplicate' ? 'font-semibold text-red-700' : 'text-slate-600'}`}>{logoResolutionLabel(currentLogo.status)}{rows[selected].logoFile?.trim() ? `: ${rows[selected].logoFile.trim()}` : ''}</p>
-          {currentLogo.status === 'ready' && <img src={currentLogo.dataUrl} alt={`Logo de ${rows[selected].payer}`} className="max-h-20 max-w-32 object-contain" />}
+          {currentLogo.status === 'ready' && <img src={config.logoUrl || currentLogo.dataUrl} alt={`Logo de ${rows[selected].payer}`} className="max-h-20 max-w-32 object-contain" />}
+          <div className="flex flex-wrap gap-2">
+            <button className={primary} disabled={currentLogo.status !== 'ready'} onClick={() => setCropEditing(true)}>Recortar logo</button>
+            {rows[selected].croppedLogoUrl && <button className={button} onClick={() => changeRow(selected, { croppedLogoUrl: undefined, logoCrop: undefined })}>Restablecer logo original</button>}
+          </div>
+          {currentLogo.status !== 'ready' && <p className="text-xs text-slate-600">Carga y asigna un logo a este aviso para habilitar el recorte.</p>}
           <label className="block text-sm">Cargar y asignar un logo a este aviso<input className={field} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { void uploadLogos(Array.from(e.target.files || []), true); e.target.value = ''; }} /></label>
           <button className={button} onClick={() => changeRow(selected, { logoFile: '' })}>Sin logo para este aviso</button>
         </fieldset>
-        </details>
+        </section>
           </div>
           <div className="flex items-center justify-between gap-2 text-xs text-slate-500"><span className="font-mono font-bold">{config.size.widthCm} × {config.size.heightCm} cm</span><label className="flex items-center gap-2"><input type="checkbox" checked={showGuides} onChange={e => setShowGuides(e.target.checked)} />Guías de margen</label></div>
           <div ref={previewAreaRef} className="flex min-h-56 items-start overflow-auto rounded-xl border border-slate-200 bg-slate-100 p-5" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '12px 12px' }}>
@@ -334,10 +352,15 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
         <div className="shrink-0 border-t border-slate-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between gap-3 text-xs"><span className="font-bold text-slate-700">{reviewed.length} / {rows.length} revisados</span><span className={invalid ? 'text-amber-700' : 'text-slate-500'}>{exportHint}</span></div>
           <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label="Revisión del lote" aria-valuemin={0} aria-valuemax={rows.length} aria-valuenow={reviewed.length}><div className="h-full bg-emerald-500 transition-all" style={{ width: `${reviewed.length / rows.length * 100}%` }} /></div>
-          <div className="flex flex-wrap gap-2"><button className={primary} disabled={busy || invalid || reviewed.length !== rows.length} onClick={() => exportBatch('combined')}><Download className="h-4 w-4" />{busy ? 'Procesando…' : 'PDF multipágina'}</button><button className={button} disabled={busy || invalid || reviewed.length !== rows.length} onClick={() => exportBatch('individual')}>PDF individuales (ZIP)</button></div>
+          <div className="flex flex-wrap gap-2"><button className={primary} disabled={busy || invalid || reviewed.length !== rows.length} onClick={() => exportBatch('combined')}><Download className="h-4 w-4" />{busy ? 'Procesando…' : rows.length === 1 ? 'Descargar PDF' : 'PDF multipágina'}</button><button className={button} disabled={busy || invalid || reviewed.length !== rows.length} onClick={() => exportBatch('individual')}>PDF individuales (ZIP)</button></div>
           {message && <p role={messageIsError ? 'alert' : 'status'} className={`mt-3 rounded-lg border p-3 text-xs ${messageIsError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{message}</p>}
         </div>
       </section>
     </div>
+    {cropEditing && currentLogo.status === 'ready' && <LogoCropEditor
+      src={currentLogo.dataUrl} initialCrop={rows[selected].logoCrop}
+      onCancel={() => setCropEditing(false)}
+      onApply={(croppedLogoUrl, logoCrop) => { changeRow(selected, { croppedLogoUrl, logoCrop }); setCropEditing(false); }}
+    />}
   </main>;
 }

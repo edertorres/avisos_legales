@@ -1,6 +1,7 @@
 /** Build safe, unique filenames so repeated advertisers cannot overwrite ZIP entries. */
-export function individualFuneralFilename(payer: string, rowIndex: number, usedNames: Set<string>): string {
-  let name = payer.normalize('NFC').trim()
+export function individualFuneralFilename(payer: string, rowIndex: number, usedNames: Set<string>, logoFile?: string): string {
+  const source = payer.trim() || (logoFile || '').trim().replace(/\.[^.]+$/, '');
+  let name = source.normalize('NFC').trim()
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
     .replace(/^[.\s]+|[.\s]+$/g, '')
     .slice(0, 100).replace(/[.\s]+$/g, '');

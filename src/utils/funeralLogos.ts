@@ -21,7 +21,9 @@ export function funeralConfigForRow(design: NoticeConfig, row: FuneralRow, logos
   return {
     ...design,
     // A template's legacy image must never leak into another advertiser's notice.
-    logoUrl: resolveFuneralLogo(row, logos).dataUrl,
+    logoUrl: resolveFuneralLogo(row, logos).status === 'ready'
+      ? row.croppedLogoUrl || resolveFuneralLogo(row, logos).dataUrl
+      : null,
     funeral: { ...design.funeral!, payer: row.payer, deceased: row.deceased, crossEnabled: row.crossEnabled === true },
   };
 }

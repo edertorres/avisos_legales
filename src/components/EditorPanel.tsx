@@ -3,6 +3,7 @@ import { BodyImageAlign, NoticeConfig, SizeOption, FontFamily, TextAlign } from 
 import { SAMPLE_SHIELD_LOGO } from '../data/samples';
 import { FONT_OPTIONS } from '../data/fonts';
 import { InDesignStepper } from './InDesignStepper';
+import { LogoCropEditor } from './LogoCropEditor';
 import { cleanPastedText, cleanPastedTextPreservingReturns } from '../utils/textCleaner';
 import {
   Upload,
@@ -46,6 +47,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   onAutoFitFont,
   isOverflowing,
 }) => {
+  const [cropEditing, setCropEditing] = useState(false);
   // Custom size modal state
   const [customWidth, setCustomWidth] = useState<string>('6.3');
   const [customHeight, setCustomHeight] = useState<string>('3.5');
@@ -63,7 +65,8 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     if (file) {
       const reader = new FileReader();
       reader.onload = (event) => {
-        onChange({ logoUrl: event.target?.result as string });
+        onChange({ logoUrl: event.target?.result as string, originalLogoUrl: undefined, logoCrop: undefined });
+        e.target.value = '';
       };
       reader.readAsDataURL(file);
     }
@@ -633,14 +636,14 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
                   {config.logoUrl ? (
                     <button
-                      onClick={() => onChange({ logoUrl: null })}
+                      onClick={() => onChange({ logoUrl: null, originalLogoUrl: undefined, logoCrop: undefined })}
                       className="text-sm bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-1.5 px-2 rounded border border-rose-200 transition-colors"
                     >
                       Quitar
                     </button>
                   ) : (
                     <button
-                      onClick={() => onChange({ logoUrl: SAMPLE_SHIELD_LOGO })}
+                      onClick={() => onChange({ logoUrl: SAMPLE_SHIELD_LOGO, originalLogoUrl: undefined, logoCrop: undefined })}
                       className="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-1.5 px-2 rounded border border-slate-300 transition-colors"
                     >
                       Usar Ejemplo
@@ -650,6 +653,10 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
 
                 {config.logoUrl && (
                   <div className="pt-1 space-y-2">
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => setCropEditing(true)} className="rounded border border-emerald-700 bg-emerald-700 px-3 py-2 text-sm font-bold text-white">Recortar logo</button>
+                      {config.originalLogoUrl && <button onClick={() => onChange({ logoUrl: config.originalLogoUrl, originalLogoUrl: undefined, logoCrop: undefined })} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm">Restablecer logo original</button>}
+                    </div>
                     <InDesignStepper
                       label="Ancho del Logo"
                       value={config.logoWidthMm}
@@ -1165,6 +1172,14 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
           </div>
         </section>
       </div>
+      {cropEditing && config.logoUrl && <LogoCropEditor
+        src={config.originalLogoUrl || config.logoUrl} initialCrop={config.logoCrop}
+        onCancel={() => setCropEditing(false)}
+        onApply={(logoUrl, logoCrop) => {
+          onChange({ logoUrl, logoCrop, originalLogoUrl: config.originalLogoUrl || config.logoUrl! });
+          setCropEditing(false);
+        }}
+      />}
     </div>
   );
 };

@@ -20,3 +20,12 @@ test('evita caracteres de ruta y nombres reservados', () => {
   assert.equal(individualFuneralFilename('../Empresa/ABC', 0, new Set()), '-Empresa-ABC.pdf');
   assert.equal(individualFuneralFilename('CON', 0, new Set()), 'aviso_CON.pdf');
 });
+
+test('usa el logo sin extensión cuando falta anunciante', () => {
+  assert.equal(individualFuneralFilename('  ', 0, new Set(), ' Empresa.Gómez.PNG '), 'Empresa.Gómez.pdf');
+  assert.equal(individualFuneralFilename('Anunciante', 0, new Set(), 'empresa.png'), 'Anunciante.pdf');
+  assert.equal(individualFuneralFilename('', 0, new Set(), '  '), 'aviso_funerario_001.pdf');
+  const used = new Set<string>();
+  assert.equal(individualFuneralFilename('', 0, used, 'empresa.png'), 'empresa.pdf');
+  assert.equal(individualFuneralFilename('', 1, used, 'empresa.jpg'), 'empresa_002.pdf');
+});

@@ -644,15 +644,17 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
     const offsetX = funeral.logoOffsetXMm || 0;
     const offsetY = funeral.logoOffsetYMm || 0;
     return <div data-funeral-logo="true" style={{
-      display: funeral.crossEnabled ? 'flex' : undefined, alignItems: 'center', gap: funeral.crossEnabled ? '1mm' : undefined,
+      position: 'relative',
       textAlign: funeralLogoPosition === 'left' ? 'left' : funeralLogoPosition === 'right' ? 'right' : 'center',
       padding: `${Math.abs(offsetY)}mm ${Math.abs(offsetX)}mm`,
       marginTop: funeralLogoAtBottom ? `${funeral.logoGapMm ?? 0.7}mm` : 0,
       marginBottom: funeralLogoAtBottom ? 0 : `${funeral.logoGapMm ?? 0.7}mm`,
       lineHeight: 0,
     }}>
-      {renderFuneralCross()}
-      <div style={{ flex: 1, minWidth: 0 }}>
+      {funeral.crossEnabled && <div style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', lineHeight: 0 }}>
+        {renderFuneralCross()}
+      </div>}
+      <div style={{ display: 'inline-block', maxWidth: '100%', minWidth: 0 }}>
       <img src={config.logoUrl} alt="Logo" onLoad={measureOverflow} style={{
         width: `${logoWidthPx}px`, maxWidth: '100%', height: 'auto', display: 'inline-block',
         transform: `translate(${offsetX}mm, ${offsetY}mm)`,
@@ -728,7 +730,7 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
         {config.noticeType === 'funeral' && config.funeral ? <div style={{ margin: config.funeral.crossEnabled && !config.logoUrl ? '0' : 'auto 0', textAlign: 'center', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', letterSpacing: `${trackingMm * 3.7795}px` }}>
           {!config.logoUrl && config.funeral.crossEnabled && <div style={{ textAlign: 'left', marginBottom: `${config.funeral.blockGapMm}mm` }}>{renderFuneralCross()}</div>}
           {!funeralLogoWithPayer && !funeralLogoAtBottom && renderFuneralLogo()}
-          <div style={{ width: funeralLogoWithPayer && !config.funeral.crossEnabled ? 'fit-content' : undefined, maxWidth: '100%', margin: '0 auto', marginBottom: `${config.funeral.blockGapMm}mm` }}>
+          <div style={{ width: funeralLogoWithPayer ? 'fit-content' : undefined, maxWidth: '100%', margin: '0 auto', marginBottom: `${config.funeral.blockGapMm}mm` }}>
             {funeralLogoWithPayer && !funeralLogoAtBottom && renderFuneralLogo()}
             <div style={{ fontWeight: 700, fontSize: `${config.headerFontSizePt}pt` }}>{config.funeral.payer}</div>
             {funeralLogoWithPayer && funeralLogoAtBottom && renderFuneralLogo()}

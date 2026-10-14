@@ -849,6 +849,10 @@ async function convertPdfToDeviceGrayWithGhostscript(
     '-dDownsampleColorImages=false',
     '-dDownsampleGrayImages=false',
     '-dDownsampleMonoImages=false',
+    '-dAutoFilterColorImages=false',
+    '-dAutoFilterGrayImages=false',
+    '-sColorImageFilter=FlateEncode',
+    '-sGrayImageFilter=FlateEncode',
     '-dDetectDuplicateImages=true',
     '-dCompressFonts=true',
     '-dSubsetFonts=true',
@@ -886,13 +890,20 @@ async function renderPdfViaApp(config: NoticeConfig, sharedBrowser?: Awaited<Ret
       deviceScaleFactor: 1,
     });
 
-    await page.goto(`http://localhost:${port}/`, { waitUntil: 'networkidle0', timeout: 20000 });
-    await page.waitForSelector('[data-notice-canvas]', { timeout: 10000 });
+    // Background requests and Vite connections do not determine PDF readiness.
+    await page.goto(`http://localhost:${port}/`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForFunction(() =>
+      typeof (window as any).__setNoticeConfig === 'function'
+      && typeof (window as any).__setPdfExportMode === 'function'
+      && !!document.querySelector('[data-notice-canvas]'),
+    { timeout: 30000 });
 
+    // CSS grayscale filters rasterize logos at Chromium's print resolution.
+    // Ghostscript converts the PDF to gray while retaining the source pixels.
     await page.evaluate((cfg: NoticeConfig) => {
       (window as any).__pdfReady = false;
       (window as any).__setNoticeConfig(cfg);
-    }, config);
+    }, { ...config, grayscaleLogo: false });
     await page.waitForFunction('window.__pdfReady === true', { timeout: 10000 });
 
     await page.evaluate(() => {
@@ -1046,7 +1057,9 @@ async function startServer() {
       || !['combined', 'individual'].includes(mode)
       || !rows.every(row => row && typeof row.payer === 'string'
         && typeof row.deceased === 'string' && row.deceased.trim()
-        && (row.logoFile === undefined || typeof row.logoFile === 'string'))
+        && (row.logoFile === undefined || typeof row.logoFile === 'string')
+        && (row.croppedLogoUrl === undefined || (typeof row.croppedLogoUrl === 'string'
+          && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(row.croppedLogoUrl))))
       || !Array.isArray(logos) || !logos.every(logo => logo && typeof logo.name === 'string' && logo.name
         && typeof logo.dataUrl === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(logo.dataUrl))) {
       res.status(400).json({ error: 'Lote inválido: incluye entre 1 y 200 avisos con el nombre del fallecido y logos PNG, JPEG o WebP.' });
@@ -1078,7 +1091,7 @@ async function startServer() {
         if (mode === 'individual') {
           const output = path.join(tempDir, `gray-${index}.pdf`);
           await convertPdfToDeviceGrayWithGhostscript(input, output, 'preserve');
-          const filename = individualFuneralFilename(config.funeral.payer, index, usedFilenames);
+          const filename = individualFuneralFilename(config.funeral.payer, index, usedFilenames, rows[index].logoFile);
           files[filename] = await fs.readFile(output);
         }
       }

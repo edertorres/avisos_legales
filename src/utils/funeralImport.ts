@@ -1,4 +1,6 @@
-export interface FuneralRow { payer: string; deceased: string; logoFile?: string; crossEnabled?: boolean }
+import type { CropRect } from './logoCrop';
+
+export interface FuneralRow { payer: string; deceased: string; logoFile?: string; crossEnabled?: boolean; croppedLogoUrl?: string; logoCrop?: CropRect }
 
 export function parseCSV(text: string): string[][] {
   text = text.replace(/^\uFEFF/, '');
