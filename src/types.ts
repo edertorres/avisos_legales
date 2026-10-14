@@ -17,6 +17,9 @@ export type FontFamily =
   | 'Lato, sans-serif'
   | 'Tinos, serif'
   | 'Lora, serif'
+  | 'Libre Bodoni, serif'
+  | 'Libre Baskerville, serif'
+  | 'Cormorant Garamond, serif'
   | 'Courier Prime, monospace'
   | string;
 
@@ -32,7 +35,28 @@ export interface BodyImage {
   widthMm?: number;
 }
 
+export interface FuneralDesign {
+  crossEnabled?: boolean;
+  crossHeightMm?: number;
+  crossStrokePt?: number;
+  crossInsetMm?: number;
+  logoPosition?: 'left' | 'right' | 'top-center' | 'bottom-center';
+  logoAlignment?: 'payer' | 'block';
+  logoOffsetXMm?: number;
+  logoOffsetYMm?: number;
+  logoGapMm?: number;
+  payer: string;
+  deceased: string;
+  introduction: string;
+  condolences: string;
+  borderGapMm: number;
+  borderColor: string;
+  blockGapMm: number;
+}
+
 export interface NoticeConfig {
+  noticeType?: 'standard' | 'funeral';
+  funeral?: FuneralDesign;
   headerTitle: string;
   subheaderTitle: string;
   bodyText: string;

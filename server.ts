@@ -1,5 +1,8 @@
+import { individualFuneralFilename } from './src/utils/funeralFilenames';
+import { funeralConfigForRow, resolveFuneralLogo } from './src/utils/funeralLogos';
+import { zipSync } from 'fflate';
 import { SharedLibraryStore } from './sharedLibraryStore';
-import { isSavedNotice, isGeneratedLogEntry } from './src/types/sharedLibrary';
+import { isSavedNotice, isGeneratedLogEntry, isNoticeConfig } from './src/types/sharedLibrary';
 import { parseFormattedText, FormattedText } from './src/utils/textFormatting';
 import express from 'express';
 import { existsSync } from 'node:fs';
@@ -513,6 +516,7 @@ function renderBodyHtml(
 }
 
 function getBoldFontList(fontFamily: string): string {
+  if (['Libre Bodoni', 'Libre Baskerville', 'Cormorant Garamond'].some(name => fontFamily.includes(name))) return fontFamily;
   if (fontFamily.includes('Barlow Semi Condensed')) return '"Barlow Semi Condensed", "Barlow Condensed", "Roboto Condensed", "Roboto", "Arimo", sans-serif';
   if (fontFamily.includes('Barlow Condensed')) return '"Barlow Condensed", "Roboto Condensed", "Roboto", "Arimo", sans-serif';
   if (fontFamily.includes('Roboto Condensed') || fontFamily.includes('Narrow')) return '"Roboto Condensed", "Roboto", "Arimo", "Noto Sans", sans-serif';
@@ -563,6 +567,13 @@ function buildWeasyNoticeHtml(config: NoticeConfig, grayProfilePath: string | nu
     ${config.subheaderTitle ? `<div class="subheader-title">${renderTextWithLineBreaksHtml(config.subheaderTitle)}</div>` : ''}
   `;
 
+  const localSerifFonts = [
+    ['libre-bodoni', 'Libre Bodoni'], ['libre-baskerville', 'Libre Baskerville'], ['cormorant-garamond', 'Cormorant Garamond'],
+  ].flatMap(([slug, name]) => [400, 700].flatMap(weight => ['normal', 'italic'].map(style => {
+    const fontPath = path.join(__dirname, 'node_modules', '@fontsource', slug, 'files', `${slug}-latin-${weight}-${style}.woff`);
+    return `@font-face { font-family: "${name}"; font-weight: ${weight}; font-style: ${style}; src: url("${fileUrl(fontPath)}") format("woff"); }`;
+  }))).join('\n');
+
   const logoHtml = config.logoUrl
     ? `<img class="notice-logo${config.grayscaleLogo ? ' grayscale-logo' : ''}" src="${escapeHtml(config.logoUrl)}" alt="Logo">`
     : '';
@@ -572,6 +583,7 @@ function buildWeasyNoticeHtml(config: NoticeConfig, grayProfilePath: string | nu
 <head>
   <meta charset="utf-8">
   <title>Aviso WeasyPrint</title>
+  <style>${localSerifFonts}</style>
   <style>
     ${outputIntentCss}
     @page {
@@ -814,7 +826,7 @@ async function verifyGrayPdfWithInkcov(outputPath: string): Promise<void> {
 }
 
 async function convertPdfToDeviceGrayWithGhostscript(
-  inputPath: string,
+  inputPath: string | string[],
   outputPath: string,
   mode: GrayConversionMode = 'flatten',
 ): Promise<void> {
@@ -847,7 +859,7 @@ async function convertPdfToDeviceGrayWithGhostscript(
     `-sDefaultGrayProfile=${grayProfile}`,
     `-sOutputFile=${outputPath}`,
     ...(pdfxDefinitionPath ? [pdfxDefinitionPath] : []),
-    inputPath,
+    ...(Array.isArray(inputPath) ? inputPath : [inputPath]),
   ];
 
   await execFileAsync('gs', gsArgs, {
@@ -858,16 +870,16 @@ async function convertPdfToDeviceGrayWithGhostscript(
   await verifyGrayPdfWithInkcov(outputPath);
 }
 
-async function renderPdfViaApp(config: NoticeConfig): Promise<Buffer> {
+async function renderPdfViaApp(config: NoticeConfig, sharedBrowser?: Awaited<ReturnType<typeof puppeteer.launch>>): Promise<Buffer> {
   const executablePath = resolveChromeExecutablePath();
-  const browser = await puppeteer.launch({
+  const browser = sharedBrowser || await puppeteer.launch({
     headless: true,
     ...(executablePath ? { executablePath } : {}),
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   });
 
+  const page = await browser.newPage();
   try {
-    const page = await browser.newPage();
     await page.setViewport({
       width: Math.ceil(config.size.widthCm * PX_PER_CM),
       height: Math.ceil(config.size.heightCm * PX_PER_CM),
@@ -899,7 +911,10 @@ async function renderPdfViaApp(config: NoticeConfig): Promise<Buffer> {
       }, { timeout: 10000 });
     }
 
-    await page.evaluate(() => document.fonts.ready);
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      await Promise.all(Array.from(document.images, image => image.decode()));
+    });
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     await page.evaluate(() => {
@@ -934,7 +949,8 @@ async function renderPdfViaApp(config: NoticeConfig): Promise<Buffer> {
     });
     return Buffer.from(pdf);
   } finally {
-    await browser.close();
+    await page.close();
+    if (!sharedBrowser) await browser.close();
   }
 }
 
@@ -1019,6 +1035,64 @@ async function startServer() {
       console.error('Ghostscript gray conversion error:', error);
       res.status(500).json({ error: message });
     } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  app.post('/api/pdf/funeral-batch', async (req, res) => {
+    const { design, rows, mode, logos = [] } = req.body || {};
+    if (!isNoticeConfig(design) || design.noticeType !== 'funeral' || !design.funeral
+      || !Array.isArray(rows) || !rows.length || rows.length > 200
+      || !['combined', 'individual'].includes(mode)
+      || !rows.every(row => row && typeof row.payer === 'string'
+        && typeof row.deceased === 'string' && row.deceased.trim()
+        && (row.logoFile === undefined || typeof row.logoFile === 'string'))
+      || !Array.isArray(logos) || !logos.every(logo => logo && typeof logo.name === 'string' && logo.name
+        && typeof logo.dataUrl === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(logo.dataUrl))) {
+      res.status(400).json({ error: 'Lote inválido: incluye entre 1 y 200 avisos con el nombre del fallecido y logos PNG, JPEG o WebP.' });
+      return;
+    }
+    for (const [index, row] of rows.entries()) {
+      const resolution = resolveFuneralLogo(row, logos);
+      if (resolution.status === 'missing' || resolution.status === 'duplicate') {
+        res.status(422).json({ error: `Aviso ${index + 1}: el logo "${row.logoFile.trim()}" ${resolution.status === 'missing' ? 'no está cargado' : 'tiene un nombre duplicado'}. Resuelve la coincidencia antes de exportar.` });
+        return;
+      }
+    }
+    const configs = rows.map(row => funeralConfigForRow(design, row, logos));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'avisos-funerarios-'));
+    let browser: Awaited<ReturnType<typeof puppeteer.launch>> | undefined;
+    let current = 0;
+    try {
+      const executablePath = resolveChromeExecutablePath();
+      browser = await puppeteer.launch({ headless: true, ...(executablePath ? { executablePath } : {}),
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
+      const inputs: string[] = [];
+      const files: Record<string, Uint8Array> = {};
+      const usedFilenames = new Set<string>();
+      for (const [index, config] of configs.entries()) {
+        current = index + 1;
+        const input = path.join(tempDir, `input-${index}.pdf`);
+        await fs.writeFile(input, await renderPdfViaApp(config, browser));
+        inputs.push(input);
+        if (mode === 'individual') {
+          const output = path.join(tempDir, `gray-${index}.pdf`);
+          await convertPdfToDeviceGrayWithGhostscript(input, output, 'preserve');
+          const filename = individualFuneralFilename(config.funeral.payer, index, usedFilenames);
+          files[filename] = await fs.readFile(output);
+        }
+      }
+      if (mode === 'individual') {
+        res.type('application/zip').send(Buffer.from(zipSync(files)));
+      } else {
+        const output = path.join(tempDir, 'lote-gray.pdf');
+        await convertPdfToDeviceGrayWithGhostscript(inputs, output, 'preserve');
+        res.type('application/pdf').send(await fs.readFile(output));
+      }
+    } catch (error) {
+      res.status(error instanceof PdfOverflowError ? 422 : 500).json({ error: `Aviso ${current}: ${error instanceof Error ? error.message : 'No se pudo generar el lote.'}` });
+    } finally {
+      if (browser) await browser.close();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });

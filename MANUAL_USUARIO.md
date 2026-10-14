@@ -212,3 +212,41 @@ Eliminar un anuncio o borrar el historial afecta a todos los usuarios.
 Los tamaños personalizados continúan siendo locales.
 
 El servidor debe tener almacenamiento persistente configurado como se indica en el README.
+
+## Avisos funerarios
+
+La pestaña **Avisos funerarios** abre una sección independiente que conserva el trabajo del editor de avisos legales. Escriba **Anunciante** y **Fallecido**, o importe un archivo **XLSX** o **CSV**. Cada fila genera un aviso; XLSX usa la primera hoja y CSV acepta coma o punto y coma. Puede indicar si hay encabezados y seleccionar las columnas de los dos nombres. La importación reemplaza el lote abierto al pulsar el botón correspondiente. Los nombres vacíos se pueden completar durante la revisión. Se admiten hasta 200 avisos y archivos de datos de hasta 10 MB.
+
+El texto introductorio, las condolencias, la tipografía, el tamaño y los ajustes de posición del logo son comunes para todo el lote. La imagen del logo corresponde a cada anunciante. El borde tiene dos líneas finas de 0,25 pt por defecto; se pueden ajustar el grosor de cada línea, su separación, el color y la distancia al texto. Los tamaños personalizados se comparten con el editor actual. Los logos admiten PNG, JPEG y WebP de hasta 5 MB.
+
+Escriba un nombre y pulse **Guardar plantilla** para guardar el diseño en la biblioteca compartida. Las plantillas conservan el texto fijo y los ajustes del logo, sin las imágenes ni los nombres variables. Las imágenes de plantillas antiguas no se aplican automáticamente a los anunciantes. Seleccione una plantilla para aplicarla al lote. Las plantillas también aparecen en **Guardados**, donde pueden eliminarse o exportarse como JSON.
+
+Seleccione cada aviso en la tabla, corrija sus nombres y compruebe la vista previa. Pulse **Marcar revisado y continuar**. Cambiar los nombres anula la revisión del aviso; cambiar el diseño anula la revisión de todo el lote. La exportación se habilita cuando todos los avisos tienen el nombre del fallecido, sus logos están resueltos y están revisados. El servidor vuelve a comprobar que el texto cabe y señala el número del aviso si detecta desbordamiento.
+
+**PDF multipágina** descarga un PDF con un aviso por página a su tamaño real. **PDF individuales (ZIP)** descarga un archivo ZIP con un PDF por aviso, con el nombre del anunciante (por ejemplo, `Empresa ABC.pdf`). Si no hay nombre de anunciante, se utiliza `aviso_funerario_001.pdf`, con el consecutivo de su fila en el lote. Los nombres repetidos llevan un sufijo como `_002` para conservar todos los archivos. Ambas opciones usan el renderizado vectorial del editor y la conversión de imprenta DeviceGray/K; los colores del borde y del logo se convierten a escala de grises. La generación de lotes grandes puede tardar varios minutos. El lote y sus imágenes permanecen al cambiar de pestaña, pero no se guardan al recargar la aplicación; conserve el archivo fuente y los logos para volver a cargarlos.
+
+### Tamaño y posición del logo funerario
+
+En **Diseño de los logos** encontrará controles de ancho proporcional, posición (izquierda, derecha, arriba centrado o abajo centrado), referencia de alineación (nombre de quien paga o todo el bloque), separación del texto y desplazamientos horizontal y vertical en milímetros. El logo ocupa una fila propia, sin texto a los lados. Con la referencia «Nombre de quien paga», la fila se coloca antes o después de ese nombre; con «Todo el bloque», antes o después del conjunto de textos. Los desplazamientos reservan espacio para evitar que el logo invada el texto. Estos ajustes se guardan en la plantilla y se aplican al lote completo; modificarlos requiere revisar nuevamente los avisos.
+
+
+### Logos por anunciante en un lote
+
+Incluya una columna opcional **logo** en el XLSX/CSV con el nombre completo del archivo, incluida su extensión; por ejemplo, `empresa-abc.png`. La columna se detecta por su encabezado y también puede seleccionarse manualmente al importar. Una celda vacía significa **sin logo**. El nombre debe coincidir exactamente, incluidas mayúsculas y minúsculas; se ignoran los espacios al principio y al final de la referencia.
+
+En **Logos del lote**, seleccione varias imágenes PNG, JPEG o WebP juntas. Puede cargarlas antes o después de importar la hoja. Se admiten hasta 5 MB por imagen y 15 MB de imágenes cargadas en total. La tabla muestra el archivo y su estado para cada aviso. Los archivos faltantes y las coincidencias duplicadas bloquean la revisión del aviso y la exportación. Para resolver un duplicado, elimine la imagen sobrante en la lista, conservando la correcta.
+
+Durante la revisión puede cambiar la referencia del archivo, elegir un nombre cargado mediante las sugerencias, cargar y asignar una imagen a ese aviso o pulsar **Sin logo para este aviso**. Cambiar una imagen o eliminarla anula la revisión de los avisos que la utilizan. El mismo archivo puede ser referenciado por varias filas. Las plantillas guardan tamaño, posición y separación, pero cada fila decide qué imagen se publica.
+
+El nombre del anunciante es opcional: puede dejarse vacío cuando el logo lo identifica. Su ausencia no bloquea la revisión ni la exportación. El nombre del fallecido sigue siendo obligatorio.
+
+### Paneles de diseño y revisión
+
+La interfaz funeraria usa el mismo estilo de controles que los avisos legales. El panel lateral tiene dos pestañas: **Diseño y plantilla** agrupa plantillas, texto común, dimensiones, tipografía, borde y posición del logo; **Importación y logos** contiene la carga de hojas e imágenes. Las tarjetas pueden plegarse, y los valores numéricos se ajustan con los botones +/− o escribiendo el valor (se admite coma decimal). Para el borde hay accesos a 0,25, 0,5 y 1 pt; los desplazamientos del logo se pueden restablecer a cero.
+
+En escritorio, cada panel tiene desplazamiento independiente y la barra de exportación permanece visible. En móvil, la revisión aparece antes del panel de diseño. La vista previa se ajusta automáticamente al ancho disponible y ofrece zoom manual, escala 100 %, el botón **Ajustar**, medidas y guías de margen. Use **Aviso anterior/siguiente** o los números de la tabla para navegar. **Marcar revisado y continuar** abre el siguiente aviso pendiente de revisión. La tabla permite buscar por anunciante, fallecido o archivo del logo y filtrar todos, sin revisar o con pendientes. La barra inferior muestra el progreso y explica qué falta para exportar.
+
+
+### Cruz opcional por aviso
+
+Active **Incluir cruz en este aviso** durante la revisión para añadir una cruz latina negra de dos trazos. Los avisos nuevos e importados empiezan con la cruz desactivada. Con logo, la cruz queda a su izquierda y a la misma altura, con espacio reservado; sin logo, aparece arriba a la izquierda, dentro del borde. En la tarjeta **Cruz opcional** ajuste altura, grosor y separación adicional al margen interior. Los ajustes se guardan en la plantilla; la activación pertenece a cada aviso. Cambiar la activación requiere revisar ese aviso de nuevo.

@@ -83,6 +83,7 @@ export const InDesignStepper: React.FC<InDesignStepperProps> = ({
           disabled={value <= min}
           className="w-7 h-7 flex items-center justify-center bg-white hover:bg-slate-100 active:bg-slate-200 text-slate-700 disabled:opacity-30 rounded border border-slate-300 transition-colors shrink-0 shadow-xs"
           title="Disminuir"
+          aria-label={`Disminuir ${label}`}
         >
           <Minus className="w-3.5 h-3.5" />
         </button>
@@ -91,6 +92,7 @@ export const InDesignStepper: React.FC<InDesignStepperProps> = ({
           <input
             type="text"
             inputMode="decimal"
+            aria-label={label}
             value={draftValue}
             onChange={(e) => setDraftValue(e.target.value)}
             onFocus={() => setIsEditing(true)}
@@ -122,6 +124,7 @@ export const InDesignStepper: React.FC<InDesignStepperProps> = ({
           disabled={value >= max}
           className="w-7 h-7 flex items-center justify-center bg-white hover:bg-slate-100 active:bg-slate-200 text-slate-700 disabled:opacity-30 rounded border border-slate-300 transition-colors shrink-0 shadow-xs"
           title="Aumentar"
+          aria-label={`Aumentar ${label}`}
         >
           <Plus className="w-3.5 h-3.5" />
         </button>

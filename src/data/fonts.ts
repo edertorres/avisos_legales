@@ -7,6 +7,10 @@ export interface FontOption {
 }
 
 export const FONT_OPTIONS: FontOption[] = [
+  { value: 'Libre Bodoni, serif', label: 'Libre Bodoni (Serif — cursiva disponible)', shortName: 'Libre Bodoni' },
+  { value: 'Libre Baskerville, serif', label: 'Libre Baskerville (Serif — cursiva disponible)', shortName: 'Libre Baskerville' },
+  { value: 'Cormorant Garamond, serif', label: 'Cormorant Garamond (Serif — cursiva disponible)', shortName: 'Cormorant Garamond' },
+
   {
     value: 'PT Sans, sans-serif',
     label: 'PT Sans (Google Fonts - Principal)',

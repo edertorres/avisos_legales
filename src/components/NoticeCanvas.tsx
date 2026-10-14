@@ -439,6 +439,7 @@ function preserveLegalNoBreaks(text: string): string {
 }
 
 function getBoldFontList(fontFamily: string): string {
+  if (['Libre Bodoni', 'Libre Baskerville', 'Cormorant Garamond'].some(name => fontFamily.includes(name))) return fontFamily;
   if (fontFamily.includes('Barlow Semi Condensed'))
     return '"Barlow Semi Condensed", "Barlow Condensed", "Roboto Condensed", "Roboto", "Arimo", sans-serif';
   if (fontFamily.includes('Barlow Condensed'))
@@ -508,6 +509,7 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
     });
     return () => cancelAnimationFrame(raf);
   }, [
+    config.funeral,
     config.bodyText,
     config.headerTitle,
     config.subheaderTitle,
@@ -624,6 +626,42 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
     );
   };
 
+  const funeral = config.funeral;
+  const funeralLogoPosition = funeral?.logoPosition || 'top-center';
+  const funeralLogoWithPayer = funeral?.logoAlignment === 'payer';
+  const funeralLogoAtBottom = funeralLogoPosition === 'bottom-center';
+  const renderFuneralCross = () => {
+    if (!funeral?.crossEnabled) return null;
+    const height = funeral.crossHeightMm ?? 6;
+    return <span style={{ display: 'inline-flex', flexShrink: 0, padding: `${funeral.crossInsetMm ?? 0}mm`, transform: config.logoUrl ? `translateY(${funeral.logoOffsetYMm || 0}mm)` : undefined, lineHeight: 0 }}>
+      <svg data-funeral-cross="true" role="img" aria-label="Cruz" viewBox="0 0 60 100" style={{ width: `${height * 0.6}mm`, height: `${height}mm`, overflow: 'visible' }}>
+        <path d="M30 3V97 M3 32H57" fill="none" stroke="black" strokeWidth={`${funeral.crossStrokePt ?? 0.5}pt`} vectorEffect="non-scaling-stroke" />
+      </svg>
+    </span>;
+  };
+  const renderFuneralLogo = () => {
+    if (!config.logoUrl || !funeral) return null;
+    const offsetX = funeral.logoOffsetXMm || 0;
+    const offsetY = funeral.logoOffsetYMm || 0;
+    return <div data-funeral-logo="true" style={{
+      display: funeral.crossEnabled ? 'flex' : undefined, alignItems: 'center', gap: funeral.crossEnabled ? '1mm' : undefined,
+      textAlign: funeralLogoPosition === 'left' ? 'left' : funeralLogoPosition === 'right' ? 'right' : 'center',
+      padding: `${Math.abs(offsetY)}mm ${Math.abs(offsetX)}mm`,
+      marginTop: funeralLogoAtBottom ? `${funeral.logoGapMm ?? 0.7}mm` : 0,
+      marginBottom: funeralLogoAtBottom ? 0 : `${funeral.logoGapMm ?? 0.7}mm`,
+      lineHeight: 0,
+    }}>
+      {renderFuneralCross()}
+      <div style={{ flex: 1, minWidth: 0 }}>
+      <img src={config.logoUrl} alt="Logo" onLoad={measureOverflow} style={{
+        width: `${logoWidthPx}px`, maxWidth: '100%', height: 'auto', display: 'inline-block',
+        transform: `translate(${offsetX}mm, ${offsetY}mm)`,
+        filter: config.grayscaleLogo ? 'grayscale(100%)' : undefined,
+      }} />
+      </div>
+    </div>;
+  };
+
   // Border
   const borderWidth = Math.max(0.2, config.borderWidthPx || 0.5);
 
@@ -637,13 +675,14 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
         position: 'relative',
         overflow: 'hidden',
         boxSizing: 'border-box',
-        border: `${borderWidth}px solid black`,
+        border: `${borderWidth}px solid ${config.funeral?.borderColor || 'black'}`,
         background: 'white',
         color: 'black',
         transform: zoomScale === 1 ? undefined : `scale(${zoomScale})`,
         transformOrigin: 'top left',
       }}
     >
+      {config.noticeType === 'funeral' && config.funeral && <div style={{ position: 'absolute', inset: `${config.funeral.borderGapMm * 3.7795 + borderWidth}px`, border: `${borderWidth}px solid ${config.funeral.borderColor}`, pointerEvents: 'none' }} />}
       {/* 3mm Margin Guide */}
       {showMarginGuides && (
         <div
@@ -667,11 +706,13 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
         data-notice-content="true"
         style={{
           position: 'absolute',
+          display: config.noticeType === 'funeral' ? 'flex' : undefined,
+          flexDirection: config.noticeType === 'funeral' ? 'column' : undefined,
           top: 0,
           left: 0,
           right: 0,
           bottom: 0,
-          padding: `${marginPx}px`,
+          padding: `${marginPx + (config.noticeType === 'funeral' ? (config.funeral?.borderGapMm || 0) * 3.7795 + borderWidth : 0)}px`,
           boxSizing: 'border-box',
           fontFamily: config.fontFamily,
           fontSize: `${config.bodyFontSizePt}pt`,
@@ -684,6 +725,19 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
           color: 'black',
         }}
       >
+        {config.noticeType === 'funeral' && config.funeral ? <div style={{ margin: config.funeral.crossEnabled && !config.logoUrl ? '0' : 'auto 0', textAlign: 'center', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap', letterSpacing: `${trackingMm * 3.7795}px` }}>
+          {!config.logoUrl && config.funeral.crossEnabled && <div style={{ textAlign: 'left', marginBottom: `${config.funeral.blockGapMm}mm` }}>{renderFuneralCross()}</div>}
+          {!funeralLogoWithPayer && !funeralLogoAtBottom && renderFuneralLogo()}
+          <div style={{ width: funeralLogoWithPayer && !config.funeral.crossEnabled ? 'fit-content' : undefined, maxWidth: '100%', margin: '0 auto', marginBottom: `${config.funeral.blockGapMm}mm` }}>
+            {funeralLogoWithPayer && !funeralLogoAtBottom && renderFuneralLogo()}
+            <div style={{ fontWeight: 700, fontSize: `${config.headerFontSizePt}pt` }}>{config.funeral.payer}</div>
+            {funeralLogoWithPayer && funeralLogoAtBottom && renderFuneralLogo()}
+          </div>
+          <div style={{ fontStyle: 'italic', marginBottom: `${config.funeral.blockGapMm}mm` }}>{config.funeral.introduction}</div>
+          <div style={{ fontWeight: 700, fontSize: `${config.subheaderFontSizePt}pt`, marginBottom: `${config.funeral.blockGapMm}mm` }}>{config.funeral.deceased}</div>
+          <div style={{ fontStyle: 'italic' }}>{config.funeral.condolences}</div>
+          {!funeralLogoWithPayer && funeralLogoAtBottom && renderFuneralLogo()}
+        </div> : <>
         {/* Top-center logo */}
         {hasTopLogo && (
           <div style={{ textAlign: 'center', marginBottom: '1.5pt' }}>
@@ -748,6 +802,7 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
           )}
           {hasSideLogo && <div style={{ clear: 'both' }} />}
         </div>
+        </>}
       </div>
     </div>
   );

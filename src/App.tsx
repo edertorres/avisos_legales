@@ -1,3 +1,4 @@
+import { FuneralWorkspace } from './components/FuneralWorkspace';
 import { isNoticeConfig, type SavedNotice, type GeneratedLogEntry, type SharedLibrary } from './types/sharedLibrary';
 import { requestSharedLibrary, loadAndMigrateLibrary } from './utils/sharedLibraryClient';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
@@ -9,7 +10,7 @@ import { NoticePreview } from './components/NoticePreview';
 import { NoticeCanvas } from './components/NoticeCanvas';
 import { generateNoticePDF, generateNoticePDFWithWeasyPrint } from './utils/pdfGenerator';
 import { calculateAutoFitFont } from './utils/autoFitAlgorithm';
-import { AlertTriangle, Download, FileText, Loader2, PanelLeftClose, PanelLeftOpen, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, Download, FileText, Flower2, Loader2, PanelLeftClose, PanelLeftOpen, Trash2, Upload, X } from 'lucide-react';
 
 interface PrintRiskAnalysis {
   hasRisk: boolean;
@@ -59,6 +60,8 @@ function mergeSizes(baseSizes: SizeOption[], extraSizes: SizeOption[]): SizeOpti
 }
 
 export default function App() {
+  const [funeralTemplate, setFuneralTemplate] = useState<SavedNotice | null>(null);
+  const [section, setSection] = useState<'standard' | 'funeral'>('standard');
   const [config, setConfig] = useState<NoticeConfig>(DEFAULT_NOTICE_CONFIG);
   const [sizes, setSizes] = useState<SizeOption[]>(INITIAL_SIZES);
   const [isExporting, setIsExporting] = useState<boolean>(false);
@@ -269,7 +272,9 @@ export default function App() {
 
   const handleLoadSavedNotice = (savedNotice: SavedNotice) => {
     ensureSizeAvailable(savedNotice.config.size);
-    setConfig(savedNotice.config);
+    if (savedNotice.config.noticeType === 'funeral') {
+      setFuneralTemplate(savedNotice); setSection('funeral');
+    } else { setSection('standard'); setConfig(savedNotice.config); }
     setIsSavedNoticesOpen(false);
     showToast(`Anuncio cargado: ${savedNotice.name}`);
   };
@@ -395,7 +400,11 @@ export default function App() {
           });
         }
         ensureSizeAvailable(importedConfig.size);
-        setConfig(importedConfig);
+        if (importedConfig.noticeType === 'funeral' && importedConfig.funeral) {
+          const now = new Date().toISOString();
+          setFuneralTemplate({ id: `import-${crypto.randomUUID()}`, name: parsed?.notice?.name || file.name, config: importedConfig, createdAt: now, updatedAt: now });
+          setSection('funeral');
+        } else { setConfig(importedConfig); setSection('standard'); }
         showToast('Anuncio importado correctamente.');
       } catch (err) {
         console.error('Notice JSON import error:', err);
@@ -674,6 +683,30 @@ export default function App() {
 
   return (
     <div className="h-screen w-screen bg-slate-100 text-slate-900 flex flex-col font-sans overflow-hidden">
+      <nav className="relative z-40 shrink-0 border-b border-slate-700 bg-slate-950 px-3 py-3 sm:px-5" aria-label="Tipo de aviso">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+          <div className="w-full sm:w-auto">
+            <p className="mb-2 text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Selecciona el tipo de aviso</p>
+            <div className="flex gap-2">
+              {([
+                { id: 'standard', label: 'Avisos legales', icon: FileText },
+                { id: 'funeral', label: 'Avisos funerarios', icon: Flower2 },
+              ] as const).map(({ id, label, icon: Icon }) => <button
+                key={id}
+                type="button"
+                aria-pressed={section === id}
+                onClick={() => setSection(id)}
+                className={`flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-extrabold transition-colors focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-300 sm:flex-none sm:px-5 sm:text-base ${section === id ? 'border-emerald-300 bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300/30' : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-slate-400 hover:bg-slate-700'}`}
+              ><Icon className="h-5 w-5 shrink-0" /><span>{label}</span></button>)}
+            </div>
+          </div>
+          <p className="flex items-center gap-2 text-xs text-slate-300" role="status" aria-live="polite">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" aria-hidden="true" />
+            Editando: <strong className="font-bold text-white">{section === 'standard' ? 'Avisos legales' : 'Avisos funerarios'}</strong>
+          </p>
+        </div>
+      </nav>
+      <div className={section === 'funeral' ? 'hidden' : 'shrink-0'}>
       {/* Header Bar */}
       <Header
         onLoadSample={handleLoadSample}
@@ -699,8 +732,15 @@ export default function App() {
         onChange={(event) => handleImportNoticeJsonFile(event.target.files?.[0] || null)}
       />
 
+      </div>
+      <div className={section === 'funeral' ? 'flex flex-1 min-h-0 flex-col' : 'hidden'}>
+        <FuneralWorkspace loadedTemplate={funeralTemplate} sizes={sizes} onAddSize={handleAddCustomSize} templates={savedNotices} onSaveTemplate={async (name, templateConfig) => {
+          const now = new Date().toISOString();
+          await mutateLibrary('/notices', 'POST', { id: `notice-${crypto.randomUUID()}`, name, config: templateConfig, createdAt: now, updatedAt: now });
+        }} />
+      </div>
       {/* Main Workspace */}
-      <main className="flex-1 min-h-0 w-full p-3 sm:p-4 grid grid-cols-1 lg:grid-cols-12 gap-4 overflow-y-auto lg:overflow-hidden">
+      <main className={`${section === 'funeral' ? 'hidden' : 'grid'} flex-1 min-h-0 w-full p-3 sm:p-4 grid-cols-1 lg:grid-cols-12 gap-4 overflow-y-auto lg:overflow-hidden`}>
         {/* Left Control Panel (5 cols desktop - Independent internal scroll) */}
         {!isEditorPanelCollapsed && (
           <div className="order-2 lg:order-1 lg:col-span-5 h-[500px] lg:h-full min-h-0 flex flex-col overflow-hidden relative">
