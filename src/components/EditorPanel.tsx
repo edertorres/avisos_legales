@@ -1,8 +1,23 @@
-import React, { useState, useRef } from 'react';
-import { BodyImageAlign, NoticeConfig, SizeOption, FontFamily, TextAlign } from '../types';
+import React, { useEffect, useState, useRef } from 'react';
+import { BodyImageAlign, NoticeConfig, SizeOption } from '../types';
 import { SAMPLE_SHIELD_LOGO } from '../data/samples';
-import { FONT_OPTIONS } from '../data/fonts';
 import { InDesignStepper } from './InDesignStepper';
+import { TableEditorModal } from './TableEditorModal';
+import { getTableFontSizePt } from './NoticeCanvas';
+import { readClipboard } from '../utils/clipboardTables';
+import {
+  createEmptyTable,
+  findTableBlocks,
+  parseClipboardTable,
+  serializeTable,
+  tableAt,
+  tableFromGrid,
+  type TableBlock,
+  type TableModel,
+} from '../utils/tableMarkup';
+import { CompactStepper } from './CompactStepper';
+import { ControlGroup } from './ControlGroup';
+import * as ui from './ui';
 import { LogoCropEditor } from './LogoCropEditor';
 import { cleanPastedText, cleanPastedTextPreservingReturns } from '../utils/textCleaner';
 import {
@@ -15,7 +30,6 @@ import {
   AlignCenter,
   AlignRight,
   Sliders,
-  Sparkles,
   Bold,
   Underline,
   Plus,
@@ -26,6 +40,9 @@ import {
   BoxSelect,
   Grid,
   WrapText,
+  X,
+  Crop,
+  Highlighter,
 } from 'lucide-react';
 
 interface EditorPanelProps {
@@ -34,8 +51,25 @@ interface EditorPanelProps {
   sizes: SizeOption[];
   onAddCustomSize: (newSize: SizeOption) => void;
   onDeleteCustomSize: (id: string) => void;
-  onAutoFitFont: () => void;
-  isOverflowing: boolean;
+  /** Ask the panel to open the table editor for the n-th table of the body (from a canvas click). */
+  tableEditRequest?: { index: number; nonce: number } | null;
+}
+
+interface TableEditorState {
+  initial: TableModel;
+  /** The block being edited, or null when inserting a new table at `insertAt`. */
+  block: TableBlock | null;
+  insertAt: number;
+}
+
+/** Insert a block on its own lines at `position`. Returns the new text and the block's end offset. */
+function insertBlock(text: string, position: number, block: string): { text: string; end: number } {
+  const before = text.slice(0, position);
+  const after = text.slice(position);
+  const prefix = before && !before.endsWith('\n') ? '\n' : '';
+  const suffix = after && !after.startsWith('\n') ? '\n' : '';
+  const inserted = `${prefix}${block}${suffix}`;
+  return { text: before + inserted + after, end: before.length + prefix.length + block.length };
 }
 
 export const EditorPanel: React.FC<EditorPanelProps> = ({
@@ -44,9 +78,9 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   sizes,
   onAddCustomSize,
   onDeleteCustomSize,
-  onAutoFitFont,
-  isOverflowing,
+  tableEditRequest,
 }) => {
+  const [tableEditor, setTableEditor] = useState<TableEditorState | null>(null);
   const [cropEditing, setCropEditing] = useState(false);
   // Custom size modal state
   const [customWidth, setCustomWidth] = useState<string>('6.3');
@@ -162,31 +196,46 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
   };
 
   // Paste handler for body text: strips formatting while preserving manual line breaks.
+  /**
+   * Body paste. In order: a table in the clipboard HTML (Excel, Sheets, Word — keeps merged
+   * cells, cells with several lines and text around the table), a tab-separated table in the
+   * plain text, and otherwise the cleaned plain text. Inside an existing table block the raw
+   * text is pasted as is, so tables are never nested.
+   */
   const handleBodyPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     e.preventDefault();
     const rawText = e.clipboardData.getData('text/plain') || e.clipboardData.getData('text');
-    const cleaned = cleanPastedTextPreservingReturns(rawText);
+    const current = config.bodyText;
+    const start = bodyTextareaRef.current?.selectionStart ?? current.length;
+    const end = bodyTextareaRef.current?.selectionEnd ?? start;
+    const before = current.slice(0, start);
+    const after = current.slice(end);
 
-    if (!bodyTextareaRef.current) {
-      onChange({ bodyText: cleaned });
-      return;
+    const commit = (text: string, caret: number) => {
+      onChange({ bodyText: text });
+      focusBodyAt(caret);
+    };
+
+    if (!tableAt(current, start)) {
+      const html = readClipboard(e.clipboardData);
+      const grid = html?.kind === 'table' ? html.grid : html ? null : parseClipboardTable(rawText);
+      if (grid) {
+        const result = insertBlock(before + after, start, serializeTable(tableFromGrid(grid)));
+        commit(result.text, result.end);
+        return;
+      }
+      if (html?.kind === 'mixed') {
+        // Table blocks must sit on their own lines.
+        const prefix = before && !before.endsWith('\n') && html.text.startsWith('##table') ? '\n' : '';
+        const suffix = after && !after.startsWith('\n') && html.text.endsWith('##/table') ? '\n' : '';
+        const inserted = `${prefix}${html.text}${suffix}`;
+        commit(before + inserted + after, before.length + inserted.length);
+        return;
+      }
     }
 
-    const textarea = bodyTextareaRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const current = config.bodyText;
-
-    const newText = current.substring(0, start) + cleaned + current.substring(end);
-    onChange({ bodyText: newText });
-
-    setTimeout(() => {
-      if (bodyTextareaRef.current) {
-        bodyTextareaRef.current.focus();
-        const newPos = start + cleaned.length;
-        bodyTextareaRef.current.setSelectionRange(newPos, newPos);
-      }
-    }, 0);
+    const cleaned = cleanPastedTextPreservingReturns(rawText);
+    commit(before + cleaned + after, start + cleaned.length);
   };
 
   // Paste handler for title inputs
@@ -282,7 +331,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     }
   };
 
-  // Auto-highlight names and document identifiers through Typst bold keywords.
+  // Auto-highlight names and document identifiers as bold keywords.
   const autoHighlightNamesAndDocs = () => {
     const keywords = [...(config.boldKeywords || [])];
     const text = config.bodyText || '';
@@ -314,95 +363,66 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     onChange({ boldKeywords: [] });
   };
 
+  const removeHighlight = (keyword: string) => {
+    onChange({ boldKeywords: (config.boldKeywords || []).filter((kw) => kw !== keyword) });
+  };
+
   const highlightedCount = config.boldKeywords?.length || 0;
-  const bodyWordCount = (config.bodyText || '').trim().split(/\s+/).filter(Boolean).length;
-  const tableFontSizePt = config.tableFontSizePt ?? Number(Math.max(4, config.bodyFontSizePt * 0.85).toFixed(2));
+  const tableFontSizePt = getTableFontSizePt(config);
   const maxBodyImageWidthMm = Math.max(4, config.size.widthCm * 10 - config.marginMm * 2);
   const defaultBodyImageWidthMm = Math.min(25, Math.max(8, maxBodyImageWidthMm));
 
-  const insertBodyTextAtCursor = (insertText: string) => {
-    if (!bodyTextareaRef.current) {
-      onChange({ bodyText: `${config.bodyText}${insertText}` });
-      return;
-    }
+  // ── Table editor ──
+  const openTableEditor = (block: TableBlock | null, insertAt: number) =>
+    setTableEditor({ initial: block?.model ?? createEmptyTable(), block, insertAt });
 
-    const textarea = bodyTextareaRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const current = config.bodyText;
-    const newText = current.substring(0, start) + insertText + current.substring(end);
-    onChange({ bodyText: newText });
-
-    setTimeout(() => {
-      if (bodyTextareaRef.current) {
-        bodyTextareaRef.current.focus();
-        const pos = start + insertText.length;
-        bodyTextareaRef.current.setSelectionRange(pos, pos);
-      }
-    }, 0);
+  /** Toolbar button: edit the table under the cursor, or insert a new one there. */
+  const handleTableButton = () => {
+    const cursor = bodyTextareaRef.current?.selectionStart ?? config.bodyText.length;
+    openTableEditor(tableAt(config.bodyText, cursor), cursor);
   };
 
-  const renderSimpleFontSizeControl = (
-    label: string,
-    value: number,
-    onValueChange: (value: number) => void,
-    min: number,
-    max: number
-  ) => {
-    const commitValue = (rawValue: string) => {
-      const parsed = parseFloat(rawValue.replace(',', '.'));
-      if (Number.isNaN(parsed)) return;
-      const clamped = Math.min(max, Math.max(min, parsed));
-      onValueChange(Number(clamped.toFixed(2)));
-    };
+  useEffect(() => {
+    if (!tableEditRequest) return;
+    const block = findTableBlocks(config.bodyText)[tableEditRequest.index];
+    if (block) openTableEditor(block, block.start);
+    // Only react to new requests (nonce), not to text edits.
+  }, [tableEditRequest?.nonce]);
 
-    return (
-      <div className="flex items-center justify-between gap-2 bg-slate-100 px-2 py-1.5 rounded-md border border-slate-200">
-        <span className="text-xs text-slate-600 font-extrabold uppercase">{label}</span>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => onValueChange(Math.max(min, Number((value - 0.5).toFixed(1))))}
-            className="p-1 hover:bg-white rounded text-slate-700 border border-transparent hover:border-slate-200"
-            title={`Reducir ${label.toLowerCase()}`}
-          >
-            <Minus className="w-3 h-3" />
-          </button>
-          <div className="relative w-20">
-            <input
-              type="text"
-              inputMode="decimal"
-              defaultValue={value.toString()}
-              key={`${label}-${value}`}
-              onBlur={(e) => commitValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.currentTarget.blur();
-                }
-              }}
-              className="w-full rounded border border-slate-300 bg-white py-1 pr-6 pl-2 text-center font-mono text-sm font-extrabold text-slate-950 focus:outline-none focus:ring-2 focus:ring-slate-900"
-            />
-            <span className="absolute right-1.5 top-1/2 -translate-y-1/2 select-none text-xs font-extrabold text-slate-500 pointer-events-none">
-              pt
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => onValueChange(Math.min(max, Number((value + 0.5).toFixed(1))))}
-            className="p-1 hover:bg-white rounded text-slate-700 border border-transparent hover:border-slate-200"
-            title={`Aumentar ${label.toLowerCase()}`}
-          >
-            <Plus className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
-    );
+  const focusBodyAt = (position: number) => setTimeout(() => {
+    bodyTextareaRef.current?.focus();
+    bodyTextareaRef.current?.setSelectionRange(position, position);
+  }, 0);
+
+  const applyTable = (model: TableModel) => {
+    if (!tableEditor) return;
+    const block = serializeTable(model);
+    const text = config.bodyText;
+    if (tableEditor.block) {
+      const { start, end } = tableEditor.block;
+      onChange({ bodyText: text.slice(0, start) + block + text.slice(end) });
+      focusBodyAt(start + block.length);
+    } else {
+      const result = insertBlock(text, tableEditor.insertAt, block);
+      onChange({ bodyText: result.text });
+      focusBodyAt(result.end);
+    }
+    setTableEditor(null);
+  };
+
+  const deleteTable = () => {
+    if (!tableEditor?.block) return;
+    const { start, end } = tableEditor.block;
+    const text = config.bodyText;
+    onChange({ bodyText: (text.slice(0, start) + text.slice(end)).replace(/\n{3,}/g, '\n\n') });
+    focusBodyAt(start);
+    setTableEditor(null);
   };
 
   const handleAddCustomSizeSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const w = parseFloat(customWidth);
-    const h = parseFloat(customHeight);
+    const w = parseFloat(customWidth.replace(',', '.'));
+    const h = parseFloat(customHeight.replace(',', '.'));
     if (isNaN(w) || isNaN(h) || w <= 0 || h <= 0) return;
 
     const name = customName.trim() || `${w} x ${h} cm`;
@@ -420,539 +440,380 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
     setCustomName('');
   };
 
+  // Format buttons keep the textarea selection (mouse down would blur it).
+  const keepSelection = (e: React.MouseEvent) => e.preventDefault();
+  const toolButton = `${ui.segmented.option(false)} !min-h-8`;
+
   return (
-    <div className="bg-slate-50 rounded-xl shadow-sm border border-slate-200 flex flex-col h-full overflow-hidden">
-      {/* Panel Header */}
-      <div className="bg-white text-slate-900 px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-950 text-emerald-300">
-            <Layers className="w-4 h-4" />
-          </div>
-          <h2 className="text-sm font-black uppercase tracking-wide">
-            Parámetros del Aviso
-          </h2>
-        </div>
-        <span
-          className={`text-xs px-2.5 py-1 rounded-full border font-bold ${
-            isOverflowing
-              ? 'bg-rose-50 text-rose-700 border-rose-200'
-              : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-          }`}
-        >
-          {isOverflowing ? 'Desborde activo' : 'Edición en vivo'}
+    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-stone-200 bg-stone-50">
+      <div className="flex items-center justify-between gap-3 border-b border-stone-200 bg-white px-4 py-2.5">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-stone-800">
+          <Layers className="h-4 w-4 text-stone-500" />
+          Contenido del aviso
+        </h2>
+        <span className="mr-10 hidden text-[11px] text-stone-500 xl:inline">
+          Tipografía en la barra de la vista previa
         </span>
       </div>
 
-      {/* Unified Single-Canvas Editor Body */}
-      <div className="p-3 overflow-y-auto flex-1 space-y-4">
-        {/* SECTION 1: TAMAÑO EN CM & MARGEN */}
-        <section className="space-y-3 rounded-lg border border-slate-200 border-l-4 border-l-emerald-500 bg-white p-3.5 shadow-sm">
-          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-200">
-            <h3 className="text-sm font-black uppercase text-slate-950 flex items-center gap-2">
-              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
-                <Ruler className="w-4 h-4" />
-              </span>
-              Dimensión del aviso
-            </h3>
-            <span className="text-xs font-mono font-extrabold text-slate-950 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200">
-              {config.size.widthCm} × {config.size.heightCm} cm
-            </span>
-          </div>
-
-          {/* Size selector dropdown */}
+      <div className="flex-1 space-y-3 overflow-y-auto p-3">
+        {/* Size and margin */}
+        <ControlGroup
+          title="Tamaño y margen"
+          icon={<Ruler className="h-4 w-4" />}
+          aside={<span className={ui.chip.neutral}>{config.size.widthCm} × {config.size.heightCm} cm</span>}
+        >
           <div className="flex items-center gap-2">
             <select
               value={config.size.id}
+              aria-label="Tamaño del aviso"
               onChange={(e) => {
                 const selected = sizes.find((sz) => sz.id === e.target.value);
                 if (selected) onChange({ size: selected });
               }}
-              className="flex-1 text-sm font-bold border border-slate-300 rounded-lg p-2.5 bg-white text-slate-900 focus:ring-2 focus:ring-slate-900 focus:outline-none"
+              className={ui.field}
             >
               {sizes.map((sz) => (
-                <option key={sz.id} value={sz.id} className="text-slate-900 bg-white">
+                <option key={sz.id} value={sz.id}>
                   {sz.widthCm} × {sz.heightCm} cm — {sz.name}
                 </option>
               ))}
             </select>
+            <button
+              type="button"
+              onClick={() => setShowAddSizeModal(!showAddSizeModal)}
+              aria-expanded={showAddSizeModal}
+              className={`${ui.btn.icon} !h-9 !w-9`}
+              title="Añadir un tamaño en centímetros"
+              aria-label="Añadir tamaño"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
             {config.size.isCustom && (
               <button
+                type="button"
                 onClick={() => onDeleteCustomSize(config.size.id)}
-                className="p-2.5 bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors flex items-center justify-center shrink-0"
+                className={`${ui.btn.icon} !h-9 !w-9 hover:!border-rose-200 hover:!bg-rose-50 hover:!text-rose-700`}
                 title="Eliminar este tamaño personalizado"
+                aria-label="Eliminar tamaño personalizado"
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className="h-4 w-4" />
               </button>
             )}
           </div>
 
-          {/* Add custom size form */}
-          <div>
-            <button
-              onClick={() => setShowAddSizeModal(!showAddSizeModal)}
-              className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 text-sm font-bold rounded-lg border border-slate-300 transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Añadir Otro Tamaño en Centímetros</span>
-            </button>
+          {showAddSizeModal && (
+            <form onSubmit={handleAddCustomSizeSubmit} className="space-y-2 rounded-lg border border-stone-200 bg-stone-50 p-3">
+              <div className="grid grid-cols-2 gap-2">
+                <label className={ui.label}>
+                  Ancho (cm)
+                  <input type="text" inputMode="decimal" value={customWidth} onChange={(e) => setCustomWidth(e.target.value)} className={`${ui.field} mt-1 tabular-nums`} required />
+                </label>
+                <label className={ui.label}>
+                  Alto (cm)
+                  <input type="text" inputMode="decimal" value={customHeight} onChange={(e) => setCustomHeight(e.target.value)} className={`${ui.field} mt-1 tabular-nums`} required />
+                </label>
+              </div>
+              <label className={ui.label}>
+                Etiqueta (opcional)
+                <input type="text" placeholder="Ej: AVISO 6.3x3.5 Especial" value={customName} onChange={(e) => setCustomName(e.target.value)} className={`${ui.field} mt-1`} />
+              </label>
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setShowAddSizeModal(false)} className={ui.btn.ghost}>Cancelar</button>
+                <button type="submit" className={ui.btn.primary}>Añadir tamaño</button>
+              </div>
+            </form>
+          )}
 
-            {showAddSizeModal && (
-              <form onSubmit={handleAddCustomSizeSubmit} className="mt-2 bg-slate-50 p-3 rounded-lg border border-slate-300 space-y-2">
-                <div className="text-sm font-black text-slate-900">
-                  Definir Tamaño Personalizado
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Ancho (cm)</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="1"
-                      max="50"
-                      value={customWidth}
-                      onChange={(e) => setCustomWidth(e.target.value)}
-                      className="w-full text-sm font-mono font-bold border border-slate-300 rounded px-2 py-1.5 bg-white text-slate-900"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Alto (cm)</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="1"
-                      max="50"
-                      value={customHeight}
-                      onChange={(e) => setCustomHeight(e.target.value)}
-                      className="w-full text-sm font-mono font-bold border border-slate-300 rounded px-2 py-1.5 bg-white text-slate-900"
-                      required
-                    />
-                  </div>
-                </div>
+          <InDesignStepper
+            label="Margen de texto"
+            value={config.marginMm}
+            onChange={(marginMm) => onChange({ marginMm })}
+            min={1}
+            max={10}
+            step={0.5}
+            unit="mm"
+            presets={[1, 2, 3, 4, 5]}
+            icon={<BoxSelect className="h-3.5 w-3.5 text-stone-500" />}
+          />
+        </ControlGroup>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Etiqueta (Opcional)</label>
-                  <input
-                    type="text"
-                    placeholder="Ej: AVISO 6.3x3.5 Especial"
-                    value={customName}
-                    onChange={(e) => setCustomName(e.target.value)}
-                    className="w-full text-sm border border-slate-300 rounded px-2 py-1.5 bg-white text-slate-900 placeholder:text-slate-400"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowAddSizeModal(false)}
-                    className="px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200 rounded"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-3 py-1.5 text-xs bg-slate-900 text-white font-bold rounded hover:bg-slate-800"
-                  >
-                    Guardar
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-
-          {/* Margin Rule setup (3mm default) */}
-          <div className="mt-2">
-            <InDesignStepper
-              label="Margen de Texto"
-              value={config.marginMm}
-              onChange={(marginMm) => onChange({ marginMm })}
-              min={1}
-              max={10}
-              step={0.5}
-              unit="mm"
-              presets={[1, 2, 3, 4, 5]}
-              icon={<BoxSelect className="w-3.5 h-3.5 text-slate-600" />}
-            />
-          </div>
-        </section>
-
-        {/* SECTION 2: TEXTO Y LOGO */}
-        <section className="space-y-3 rounded-lg border border-slate-200 border-l-4 border-l-blue-500 bg-white p-3.5 shadow-sm">
-          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-200">
-            <h3 className="text-sm font-black uppercase text-slate-950 flex items-center gap-2">
-              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-blue-50 text-blue-700 border border-blue-200">
-                <Type className="w-4 h-4" />
-              </span>
-              Texto e imagen
-            </h3>
-            <span className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-extrabold text-amber-900">
-              {bodyWordCount} palabras
-            </span>
-          </div>
-
-          {/* Logo Escudo Top Left */}
-          <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-200 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                <ImageIcon className="w-3.5 h-3.5 text-slate-600" />
-                Logo Escudo (Esquina Izquierda)
-              </span>
-              {config.logoUrl && (
-                <span className="text-xs text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                  Logo Activo
-                </span>
-              )}
-            </div>
-
+        {/* Logo */}
+        <ControlGroup
+          title="Logo o escudo"
+          icon={<ImageIcon className="h-4 w-4" />}
+          aside={config.logoUrl ? <span className={ui.chip.ok}>Activo</span> : undefined}
+        >
+          <div id="editor-logo" tabIndex={-1} className="space-y-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded border border-slate-300 bg-white flex items-center justify-center overflow-hidden p-1 shrink-0">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-stone-200 bg-white p-1">
                 {config.logoUrl ? (
-                  <img
-                    src={config.logoUrl}
-                    alt="Logo"
-                    className="max-h-full max-w-full object-contain filter grayscale"
-                  />
+                  <img src={config.logoUrl} alt="Logo" className="max-h-full max-w-full object-contain grayscale" />
                 ) : (
-                  <span className="text-[9px] text-slate-400 text-center leading-tight">Sin Logo</span>
+                  <span className="text-center text-[10px] leading-tight text-stone-400">Sin logo</span>
                 )}
               </div>
-
-              <div className="flex-1 space-y-1">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => logoInputRef.current?.click()}
-                    className="flex-1 flex items-center justify-center gap-1 text-sm bg-white hover:bg-slate-100 text-slate-700 font-bold py-1.5 px-2 rounded border border-slate-300 transition-colors"
-                  >
-                    <Upload className="w-3 h-3 text-slate-500" />
-                    Subir Imagen
-                  </button>
-                  <input
-                    ref={logoInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleLogoUpload}
-                    className="hidden"
-                  />
-
-                  {config.logoUrl ? (
+              <div className="flex flex-1 flex-wrap gap-2">
+                <button type="button" onClick={() => logoInputRef.current?.click()} className={ui.btn.secondary}>
+                  <Upload className="h-3.5 w-3.5" />
+                  {config.logoUrl ? 'Cambiar' : 'Subir imagen'}
+                </button>
+                <input ref={logoInputRef} type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+                {config.logoUrl ? (
+                  <>
+                    <button type="button" onClick={() => setCropEditing(true)} className={ui.btn.secondary}>
+                      <Crop className="h-3.5 w-3.5" />
+                      Recortar
+                    </button>
+                    {config.originalLogoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => onChange({ logoUrl: config.originalLogoUrl, originalLogoUrl: undefined, logoCrop: undefined })}
+                        className={ui.btn.ghost}
+                      >
+                        Original
+                      </button>
+                    )}
                     <button
+                      type="button"
                       onClick={() => onChange({ logoUrl: null, originalLogoUrl: undefined, logoCrop: undefined })}
-                      className="text-sm bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-1.5 px-2 rounded border border-rose-200 transition-colors"
+                      className={ui.btn.danger}
                     >
                       Quitar
                     </button>
-                  ) : (
-                    <button
-                      onClick={() => onChange({ logoUrl: SAMPLE_SHIELD_LOGO, originalLogoUrl: undefined, logoCrop: undefined })}
-                      className="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-1.5 px-2 rounded border border-slate-300 transition-colors"
-                    >
-                      Usar Ejemplo
-                    </button>
-                  )}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onChange({ logoUrl: SAMPLE_SHIELD_LOGO, originalLogoUrl: undefined, logoCrop: undefined })}
+                    className={ui.btn.ghost}
+                  >
+                    Usar ejemplo
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {config.logoUrl && (
+              <>
+                <InDesignStepper
+                  label="Ancho del logo"
+                  value={config.logoWidthMm}
+                  onChange={(logoWidthMm) => onChange({ logoWidthMm })}
+                  min={0.1}
+                  max={1000}
+                  step={0.1}
+                  unit="mm"
+                  decimals={1}
+                  presets={[8, 10, 12, 15, 18, 25, 40]}
+                  icon={<ImageIcon className="h-3.5 w-3.5 text-stone-500" />}
+                />
+
+                <div>
+                  <span className={ui.label}>Posición</span>
+                  <div className={`${ui.segmented.group} flex w-full`} role="group" aria-label="Posición del logo">
+                    {[
+                      { pos: 'left', label: 'Izquierda' },
+                      { pos: 'right', label: 'Derecha' },
+                      { pos: 'top-center', label: 'Arriba centrado' },
+                    ].map((opt) => {
+                      const active = (config.logoPosition || 'left') === opt.pos;
+                      return (
+                        <button
+                          key={opt.pos}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => onChange({ logoPosition: opt.pos as NoticeConfig['logoPosition'] })}
+                          className={`${ui.segmented.option(active)} flex-1`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                {config.logoUrl && (
-                  <div className="pt-1 space-y-2">
-                    <div className="flex flex-wrap gap-2">
-                      <button onClick={() => setCropEditing(true)} className="rounded border border-emerald-700 bg-emerald-700 px-3 py-2 text-sm font-bold text-white">Recortar logo</button>
-                      {config.originalLogoUrl && <button onClick={() => onChange({ logoUrl: config.originalLogoUrl, originalLogoUrl: undefined, logoCrop: undefined })} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm">Restablecer logo original</button>}
+                {(config.logoPosition || 'left') !== 'top-center' && (
+                  <div>
+                    <span className={ui.label}>Alineación vertical</span>
+                    <div className={`${ui.segmented.group} flex w-full`} role="group" aria-label="Alineación vertical del logo">
+                      {[
+                        { value: 'body', label: 'Con el texto' },
+                        { value: 'titles-top', label: 'Con los títulos' },
+                      ].map((opt) => {
+                        const active = (config.logoVerticalAlign || 'body') === opt.value;
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => onChange({ logoVerticalAlign: opt.value as NoticeConfig['logoVerticalAlign'] })}
+                            className={`${ui.segmented.option(active)} flex-1`}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
                     </div>
-                    <InDesignStepper
-                      label="Ancho del Logo"
-                      value={config.logoWidthMm}
-                      onChange={(logoWidthMm) => onChange({ logoWidthMm })}
-                      min={0.1}
-                      max={1000}
-                      step={0.1}
-                      unit="mm"
-                      decimals={1}
-                      presets={[8, 10, 12, 15, 18, 25, 40]}
-                      icon={<ImageIcon className="w-3 h-3 text-slate-500" />}
-                    />
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Ajuste y Posición de la Imagen (Text Wrap)
-                      </label>
-                      <div className="grid grid-cols-3 gap-1 bg-white p-1 rounded border border-slate-200">
-                        {[
-                          { pos: 'left', label: 'Izquierda (Flotante)' },
-                          { pos: 'right', label: 'Derecha (Flotante)' },
-                          { pos: 'top-center', label: 'Centrado Arriba' },
-                        ].map((opt) => {
-                          const active = (config.logoPosition || 'left') === opt.pos;
-                          return (
-                            <button
-                              key={opt.pos}
-                              type="button"
-                              onClick={() => onChange({ logoPosition: opt.pos as any })}
-                              className={`py-1.5 px-1 rounded text-[11px] font-bold transition-colors ${
-                                active
-                                  ? 'bg-slate-900 text-white shadow-sm'
-                                  : 'text-slate-600 hover:bg-slate-100'
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {(config.logoPosition || 'left') !== 'top-center' && (
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Alineación Vertical
-                        </label>
-                        <div className="grid grid-cols-2 gap-1 bg-white p-1 rounded border border-slate-200">
-                          {[
-                            { value: 'body', label: 'Con texto' },
-                            { value: 'titles-top', label: 'Con títulos' },
-                          ].map((opt) => {
-                            const active = (config.logoVerticalAlign || 'body') === opt.value;
-                            return (
-                              <button
-                                key={opt.value}
-                                type="button"
-                                onClick={() => onChange({ logoVerticalAlign: opt.value as any })}
-                                className={`py-1.5 px-1 rounded text-[11px] font-bold transition-colors ${
-                                  active
-                                    ? 'bg-slate-900 text-white shadow-sm'
-                                    : 'text-slate-600 hover:bg-slate-100'
-                                }`}
-                              >
-                                {opt.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 )}
-              </div>
+              </>
+            )}
+          </div>
+        </ControlGroup>
+
+        {/* Titles and body */}
+        <ControlGroup title="Textos" icon={<Type className="h-4 w-4" />}>
+          <div className="space-y-1.5">
+            <div className="flex items-end justify-between gap-2">
+              <label htmlFor="editor-headerTitle" className={`${ui.label} !mb-0`}>Título 1</label>
+              <CompactStepper label="Tamaño" value={config.headerFontSizePt} onChange={(headerFontSizePt) => onChange({ headerFontSizePt })} min={5} max={24} step={0.5} unit="pt" />
             </div>
+            <input
+              id="editor-headerTitle"
+              type="text"
+              value={config.headerTitle}
+              onChange={(e) => onChange({ headerTitle: e.target.value })}
+              onPaste={(e) => handleTitlePaste(e, 'headerTitle')}
+              placeholder="Ej: AVISO ÚNICO, EDICTO, CITACIÓN"
+              className={`${ui.field} text-center font-semibold`}
+            />
           </div>
 
-          {/* Titles Inputs */}
-          <div className="space-y-2">
-            <div className="space-y-2">
-              <label className="block text-xs font-extrabold text-slate-700 mb-1">
-                Título 1
-              </label>
-              <input
-                type="text"
-                value={config.headerTitle}
-                onChange={(e) => onChange({ headerTitle: e.target.value })}
-                onPaste={(e) => handleTitlePaste(e, 'headerTitle')}
-                placeholder="Ej: AVISO ÚNICO, EDICTO, CITACIÓN"
-                className="w-full text-sm font-bold text-center border border-slate-300 rounded-lg px-2.5 py-2 bg-white text-slate-900 placeholder:text-slate-400 focus:ring-2 focus:ring-slate-900 focus:outline-none"
-              />
-              {renderSimpleFontSizeControl('Tamaño Título 1', config.headerFontSizePt, (headerFontSizePt) => onChange({ headerFontSizePt }), 5, 24)}
+          <div className="space-y-1.5">
+            <div className="flex items-end justify-between gap-2">
+              <label htmlFor="editor-subheaderTitle" className={`${ui.label} !mb-0`}>Título 2</label>
+              <CompactStepper label="Tamaño" value={config.subheaderFontSizePt} onChange={(subheaderFontSizePt) => onChange({ subheaderFontSizePt })} min={4.5} max={18} step={0.5} unit="pt" />
             </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-extrabold text-slate-700 mb-1">
-                Título 2
-              </label>
-              <textarea
-                rows={2}
-                value={config.subheaderTitle}
-                onChange={(e) => onChange({ subheaderTitle: e.target.value })}
-                onPaste={(e) => handleTitlePaste(e, 'subheaderTitle')}
-                placeholder="Ej: LA DIRECTORA DE TALENTO HUMANO DEL DEPARTAMENTO DE RISARALDA"
-                className="w-full text-sm font-semibold text-center border border-slate-300 rounded-lg px-2.5 py-2 bg-white text-slate-900 placeholder:text-slate-400 focus:ring-2 focus:ring-slate-900 focus:outline-none resize-none"
-              />
-              {renderSimpleFontSizeControl('Tamaño Título 2', config.subheaderFontSizePt, (subheaderFontSizePt) => onChange({ subheaderFontSizePt }), 4.5, 18)}
-            </div>
+            <textarea
+              id="editor-subheaderTitle"
+              rows={2}
+              value={config.subheaderTitle}
+              onChange={(e) => onChange({ subheaderTitle: e.target.value })}
+              onPaste={(e) => handleTitlePaste(e, 'subheaderTitle')}
+              placeholder="Ej: LA DIRECTORA DE TALENTO HUMANO DEL DEPARTAMENTO DE RISARALDA"
+              className={`${ui.field} resize-none text-center`}
+            />
           </div>
 
-          {/* Body textarea */}
-          <div>
-            <div className="flex flex-wrap items-center justify-between mb-1 gap-1">
-              <label className="text-sm font-black text-slate-800">
-                Cuerpo del Texto
-              </label>
-              <div className="flex flex-wrap items-center gap-1">
-                {/* Selection Alignment Toolbar */}
-                <div className="flex items-center bg-slate-100 p-1 rounded-md border border-slate-300">
-                  <span className="text-xs text-slate-600 font-extrabold px-1 uppercase">Alinear Sel</span>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyAlignmentToSelection('left')}
-                    className="p-1.5 hover:bg-white text-slate-700 rounded transition-colors"
-                    title="Alinear selección a la izquierda [left]"
-                  >
-                    <AlignLeft className="w-3 h-3" />
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyAlignmentToSelection('center')}
-                    className="p-1.5 hover:bg-white text-slate-700 rounded transition-colors"
-                    title="Centrar selección [center]"
-                  >
-                    <AlignCenter className="w-3 h-3" />
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyAlignmentToSelection('right')}
-                    className="p-1.5 hover:bg-white text-slate-700 rounded transition-colors"
-                    title="Alinear selección a la derecha [right]"
-                  >
-                    <AlignRight className="w-3 h-3" />
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyAlignmentToSelection('justify')}
-                    className="p-1.5 hover:bg-white text-slate-700 rounded transition-colors"
-                    title="Justificar selección [justify]"
-                  >
-                    <AlignJustify className="w-3 h-3" />
-                  </button>
-                </div>
+          <div className="space-y-1.5">
+            <label htmlFor="editor-bodyText" className={ui.label}>Cuerpo del texto</label>
 
-                <button
-                  type="button"
-                  onClick={handleCleanBodyReturns}
-                  className="px-2 py-1.5 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1 border border-emerald-200"
-                  title="Unir líneas y quitar retornos de carro"
-                >
-                  <WrapText className="w-3 h-3 text-emerald-600" />
-                  <span className="text-[11px]">Sin Retornos</span>
+            {/* Format toolbar, grouped by purpose */}
+            <div className="flex flex-wrap items-center gap-1.5" role="toolbar" aria-label="Formato del cuerpo">
+              <div className={ui.segmented.group}>
+                <button type="button" onMouseDown={keepSelection} onClick={() => applyInlineFormatToSelection('bold')} className={toolButton} title="Negrita en la selección" aria-label="Negrita">
+                  <Bold className="h-3.5 w-3.5" />
                 </button>
-
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => applyInlineFormatToSelection('bold')}
-                  className="px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1 border border-slate-300"
-                  title="Formatear selección en negrita"
-                >
-                  <Bold className="w-3 h-3" />
-                  <span className="text-[11px]">Negrita</span>
+                <button type="button" onMouseDown={keepSelection} onClick={() => applyInlineFormatToSelection('underline')} className={toolButton} title="Subrayar la selección" aria-label="Subrayado">
+                  <Underline className="h-3.5 w-3.5" />
                 </button>
-
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => applyInlineFormatToSelection('underline')}
-                  className="px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1 border border-slate-300"
-                  title="Subrayar selección"
-                >
-                  <Underline className="w-3 h-3" />
-                  <span className="text-[11px]">Subrayado</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={autoHighlightNamesAndDocs}
-                  className="px-2 py-1.5 rounded-md bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold border border-amber-200"
-                  title="Detectar nombres, frases en mayúsculas y documentos para resaltarlos en negrita"
-                >
-                  Resaltar Nombres{highlightedCount > 0 ? ` (${highlightedCount})` : ''}
-                </button>
-
-                {highlightedCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={clearAutoHighlights}
-                    className="px-2 py-1.5 rounded-md bg-white hover:bg-slate-100 text-slate-600 text-xs font-bold border border-slate-200"
-                    title="Quitar resaltados automáticos"
-                  >
-                    Limpiar
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1 border border-slate-300"
-                >
-                  <FileUp className="w-3 h-3" />
-                  <span className="text-[11px]">.TXT</span>
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".txt"
-                  onChange={handleTextFileUpload}
-                  className="hidden"
-                />
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const tableTemplate = '\n##table\nEncabezado1 | Encabezado2 | Encabezado3\nDato 1 | Dato 2 | Dato 3\n##/table\n';
-                    insertBodyTextAtCursor(tableTemplate);
-                  }}
-                  className="px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1 border border-slate-300"
-                  title="Insertar template de tabla (usa | como separador de columnas)"
-                >
-                  <Grid className="w-3 h-3" />
-                  <span className="text-[11px]">Tabla</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => bodyImageInputRef.current?.click()}
-                  className="px-2 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1 border border-slate-300"
-                  title="Subir imagen local, raster o SVG vectorial, e insertarla en la posición del cursor"
-                >
-                  <ImageIcon className="w-3 h-3" />
-                  <span className="text-[11px]">Imagen</span>
-                </button>
-                <input
-                  ref={bodyImageInputRef}
-                  type="file"
-                  accept="image/*,.svg"
-                  onChange={handleBodyImageUpload}
-                  className="hidden"
-                />
               </div>
+
+              <div className={ui.segmented.group} title="Alinear solo la selección">
+                {[
+                  { align: 'left' as const, icon: AlignLeft, label: 'Alinear selección a la izquierda' },
+                  { align: 'center' as const, icon: AlignCenter, label: 'Centrar selección' },
+                  { align: 'right' as const, icon: AlignRight, label: 'Alinear selección a la derecha' },
+                  { align: 'justify' as const, icon: AlignJustify, label: 'Justificar selección' },
+                ].map(({ align, icon: Icon, label }) => (
+                  <button key={align} type="button" onMouseDown={keepSelection} onClick={() => applyAlignmentToSelection(align)} className={toolButton} title={label} aria-label={label}>
+                    <Icon className="h-3.5 w-3.5" />
+                  </button>
+                ))}
+              </div>
+
+              <div className={ui.segmented.group}>
+                <button type="button" onClick={handleCleanBodyReturns} className={toolButton} title="Unir líneas y quitar retornos de carro">
+                  <WrapText className="h-3.5 w-3.5" /> Sin retornos
+                </button>
+                <button type="button" onClick={autoHighlightNamesAndDocs} className={toolButton} title="Detectar nombres, frases en mayúsculas y documentos para ponerlos en negrita">
+                  <Highlighter className="h-3.5 w-3.5" /> Resaltar nombres{highlightedCount > 0 ? ` (${highlightedCount})` : ''}
+                </button>
+              </div>
+
+              <div className={ui.segmented.group}>
+                <button type="button" onClick={() => fileInputRef.current?.click()} className={toolButton} title="Importar un archivo de texto (.txt)">
+                  <FileUp className="h-3.5 w-3.5" /> .TXT
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={keepSelection}
+                  onClick={handleTableButton}
+                  className={toolButton}
+                  title="Insertar una tabla, o editar la tabla donde está el cursor. También puedes pegar una tabla de Excel o Word directamente en el texto."
+                >
+                  <Grid className="h-3.5 w-3.5" /> Tabla
+                </button>
+                <button type="button" onClick={() => bodyImageInputRef.current?.click()} className={toolButton} title="Insertar una imagen (raster o SVG) en el cursor">
+                  <ImageIcon className="h-3.5 w-3.5" /> Imagen
+                </button>
+              </div>
+              <input ref={fileInputRef} type="file" accept=".txt" onChange={handleTextFileUpload} className="hidden" />
+              <input ref={bodyImageInputRef} type="file" accept="image/*,.svg" onChange={handleBodyImageUpload} className="hidden" />
             </div>
 
             <textarea
+              id="editor-bodyText"
               ref={bodyTextareaRef}
               rows={10}
               value={config.bodyText}
               onChange={(e) => onChange({ bodyText: e.target.value })}
               onPaste={handleBodyPaste}
               placeholder="Pega o escribe aquí el texto del aviso..."
-              className="w-full text-sm font-sans border border-slate-300 rounded-lg p-3 bg-white text-slate-900 placeholder:text-slate-400 focus:ring-2 focus:ring-slate-900 focus:outline-none leading-relaxed"
+              className={`${ui.field} leading-relaxed`}
             />
-            <p className="mt-1 text-xs text-slate-500 italic">
-              * Al pegar texto se elimina el formato y se conservan los saltos insertados con Enter.
-              * Para insertar una tabla, haz clic en ⬡ Tabla o escribe{'\n'}##table{'\n'}Col1 | Col2{'\n'}Val1 | Val2{'\n'}##/table{'\n'}(también acepta tabs o comas como separadores).
-              * Para insertar una imagen local o SVG vectorial en el cursor, haz clic en 🖼 Imagen; se insertara un marcador como ##imagen:1.
-            </p>
 
-            {/* Body images preview */}
+            {highlightedCount > 0 && (
+              <div className="rounded-lg border border-stone-200 bg-stone-50 p-2">
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-stone-700">Negritas automáticas ({highlightedCount})</span>
+                  <button type="button" onClick={clearAutoHighlights} className={`${ui.btn.ghost} !min-h-6 !py-0.5 text-xs`}>
+                    Quitar todas
+                  </button>
+                </div>
+                <ul className="flex max-h-28 flex-wrap gap-1 overflow-y-auto" aria-label="Palabras en negrita automática">
+                  {(config.boldKeywords || []).map((keyword) => (
+                    <li key={keyword} className="inline-flex max-w-full items-center gap-1 rounded-full border border-stone-300 bg-white py-0.5 pl-2 pr-0.5 text-[11px] font-semibold text-stone-800">
+                      <span className="truncate">{keyword}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeHighlight(keyword)}
+                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-stone-400 hover:bg-rose-100 hover:text-rose-700"
+                        title={`Quitar negrita de «${keyword}»`}
+                        aria-label={`Quitar negrita de ${keyword}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <details className="text-xs text-stone-500">
+              <summary className="cursor-pointer font-medium text-stone-600">Marcas de formato</summary>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                <li>Al pegar se elimina el formato y se conservan los saltos de línea.</li>
+                <li><code>**texto**</code> negrita · <code>[u]texto[/u]</code> subrayado · <code>[center]…[/center]</code> alineación.</li>
+                <li>Tablas: botón Tabla, clic en la tabla de la vista previa, o pega una tabla de Excel/Word. Se guardan como <code>##table</code> … <code>##/table</code> con filas <code>| a | b |</code>.</li>
+                <li>Imagen: el botón Imagen inserta <code>##imagen:N</code> en el cursor.</li>
+              </ul>
+            </details>
+
             {(config.bodyImages || []).length > 0 && (
-              <div className="mt-2 space-y-2">
-                <label className="block text-xs font-extrabold text-slate-700">
-                  Imágenes del aviso ({(config.bodyImages || []).length})
-                </label>
-                <div className="space-y-2">
-                  {(config.bodyImages || []).map((img, idx) => (
-                    <div key={img.id} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2 shadow-sm">
-                      <img
-                        src={img.dataUrl}
-                        alt={img.name}
-                        className="h-14 w-14 shrink-0 rounded border border-slate-200 bg-white object-contain p-1"
-                      />
+              <div className="space-y-2 pt-1">
+                <span className={ui.label}>Imágenes del aviso ({(config.bodyImages || []).length})</span>
+                {(config.bodyImages || []).map((img, idx) => {
+                  const width = img.widthMm || defaultBodyImageWidthMm;
+                  return (
+                    <div key={img.id} className="flex items-center gap-2 rounded-lg border border-stone-200 bg-white p-2">
+                      <img src={img.dataUrl} alt={img.name} className="h-14 w-14 shrink-0 rounded border border-stone-200 bg-white object-contain p-1" />
                       <div className="min-w-0 flex-1 space-y-1">
-                        <div className="truncate text-[11px] font-extrabold text-slate-700">
-                          Imagen {img.slot || idx + 1}: {img.name}
-                        </div>
-                        <div className="font-mono text-[10px] font-bold text-slate-500">
-                          ##imagen:{img.slot || idx + 1}
-                        </div>
+                        <div className="truncate text-xs font-medium text-stone-700">{img.name}</div>
+                        <code className="text-[10px] text-stone-500">##imagen:{img.slot || idx + 1}</code>
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <div className="flex rounded-md border border-slate-300 bg-white p-0.5">
+                          <div className={ui.segmented.group} role="group" aria-label="Alineación de la imagen">
                             {[
                               { align: 'left' as BodyImageAlign, icon: AlignLeft, label: 'Izquierda' },
                               { align: 'center' as BodyImageAlign, icon: AlignCenter, label: 'Centro' },
@@ -964,214 +825,98 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                                 <button
                                   key={item.align}
                                   type="button"
+                                  aria-pressed={active}
                                   onClick={() => handleUpdateBodyImage(img.id, { align: item.align })}
-                                  className={`flex h-6 w-6 items-center justify-center rounded transition-colors ${
-                                    active ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
-                                  }`}
+                                  className={ui.segmented.option(active)}
                                   title={`Alinear imagen a ${item.label.toLowerCase()}`}
+                                  aria-label={`Alinear imagen a ${item.label.toLowerCase()}`}
                                 >
                                   <Icon className="h-3.5 w-3.5" />
                                 </button>
                               );
                             })}
                           </div>
-                          <div className="flex items-center rounded-md border border-slate-300 bg-white">
-                            <button
-                              type="button"
-                              onClick={() => handleUpdateBodyImage(img.id, { widthMm: Math.max(4, Number(((img.widthMm || defaultBodyImageWidthMm) - 1).toFixed(1))) })}
-                              className="flex h-6 w-6 items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-30"
-                              disabled={(img.widthMm || defaultBodyImageWidthMm) <= 4}
-                              title="Disminuir tamaño"
-                            >
-                              <Minus className="h-3.5 w-3.5" />
-                            </button>
-                            <span className="min-w-10 px-1 text-center text-[11px] font-mono font-extrabold text-slate-700">
-                              {Math.round(Math.min(img.widthMm || defaultBodyImageWidthMm, maxBodyImageWidthMm))}mm
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleUpdateBodyImage(img.id, { widthMm: Math.min(maxBodyImageWidthMm, Number(((img.widthMm || defaultBodyImageWidthMm) + 1).toFixed(1))) })}
-                              className="flex h-6 w-6 items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-30"
-                              disabled={(img.widthMm || defaultBodyImageWidthMm) >= maxBodyImageWidthMm}
-                              title="Aumentar tamaño"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
+                          <CompactStepper
+                            label="Ancho"
+                            value={Math.min(width, maxBodyImageWidthMm)}
+                            onChange={(widthMm) => handleUpdateBodyImage(img.id, { widthMm })}
+                            min={4}
+                            max={maxBodyImageWidthMm}
+                            step={1}
+                            unit="mm"
+                            decimals={1}
+                          />
                         </div>
                       </div>
                       <button
                         type="button"
                         onClick={() => handleRemoveBodyImage(img.id)}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-red-200 bg-white text-red-600 transition-colors hover:bg-red-50"
+                        className={`${ui.btn.icon} hover:!border-rose-200 hover:!bg-rose-50 hover:!text-rose-700`}
                         title="Eliminar imagen"
+                        aria-label={`Eliminar imagen ${img.name}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             )}
           </div>
-        </section>
+        </ControlGroup>
 
-        {/* SECTION 3: ATRIBUTOS DE FUENTE Y FORMATO */}
-        <section className="space-y-3 rounded-lg border border-slate-200 border-l-4 border-l-amber-500 bg-white p-3.5 shadow-sm">
-          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-200">
-            <h3 className="text-sm font-black uppercase text-slate-950 flex items-center gap-2">
-              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-amber-50 text-amber-700 border border-amber-200">
-                <Sliders className="w-4 h-4" />
-              </span>
-              Tipografía y formato
-            </h3>
-
-            <button
-              onClick={onAutoFitFont}
-              className="flex items-center gap-1 px-2.5 py-1 bg-gradient-to-r from-emerald-600 to-slate-900 text-white font-bold text-xs rounded shadow-sm hover:opacity-90"
-            >
-              <Sparkles className="w-3 h-3 text-emerald-300" />
-              Auto-Ajustar Fuente
-            </button>
-          </div>
-
-          {/* Font Family selector */}
-          <div>
-            <label className="block text-xs font-extrabold text-slate-700 mb-1">
-              Tipografía (Roboto Condensed por defecto)
-            </label>
-            <select
-              value={config.fontFamily}
-              onChange={(e) => onChange({ fontFamily: e.target.value as FontFamily })}
-              className="w-full text-sm border border-slate-300 rounded-lg p-2.5 bg-white font-bold focus:ring-2 focus:ring-slate-900 focus:outline-none"
-            >
-              {FONT_OPTIONS.map((font) => (
-                <option key={font.value} value={font.value} className="text-slate-900 bg-white">
-                  {font.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Text Alignment */}
-          <div>
-            <label className="block text-xs font-extrabold text-slate-700 mb-1">
-              Alineación
-            </label>
-            <div className="grid grid-cols-4 gap-1 bg-slate-100 p-1 rounded-lg">
-              {[
-                { align: 'justify', icon: AlignJustify, label: 'Justificado' },
-                { align: 'left', icon: AlignLeft, label: 'Izquierda' },
-                { align: 'center', icon: AlignCenter, label: 'Centro' },
-                { align: 'right', icon: AlignRight, label: 'Derecha' },
-              ].map((item) => {
-                const Icon = item.icon;
-                const active = config.textAlign === item.align;
-                return (
-                  <button
-                    key={item.align}
-                    onClick={() => onChange({ textAlign: item.align as TextAlign })}
-                    className={`flex flex-col items-center justify-center py-1.5 rounded text-xs font-bold transition-colors ${
-                      active
-                        ? 'bg-slate-900 text-white shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5 mb-0.5" />
-                    {item.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* InDesign Control Panel - Typography & Layout Grid */}
-          <div className="space-y-2 bg-slate-100/80 p-2.5 rounded-lg border border-slate-200">
-            <div className="flex items-center justify-between pb-1">
-              <span className="text-xs font-black text-slate-800 uppercase tracking-wide">
-                Controles Tipográficos (Estilo InDesign)
-              </span>
-              <span className="text-xs text-slate-600 font-mono font-bold">Alta Precisión</span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {/* Fine adjustments (font, body size, leading and alignment live in the preview toolbar) */}
+        <ControlGroup title="Ajustes finos" icon={<Sliders className="h-4 w-4" />} defaultOpen={false}>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <InDesignStepper
+              label="Tamaño de tabla"
+              value={tableFontSizePt}
+              onChange={(tableFontSizePt) => onChange({ tableFontSizePt })}
+              min={3.5}
+              max={12}
+              step={0.25}
+              unit="pt"
+              presets={[4, 4.5, 5, 5.5, 6]}
+              icon={<Grid className="h-3.5 w-3.5 text-stone-500" />}
+            />
+            <InDesignStepper
+              label="Grosor del borde"
+              value={config.borderWidthPx}
+              onChange={(borderWidthPx) => onChange({ borderWidthPx })}
+              min={0.25}
+              max={4}
+              step={0.25}
+              unit="px"
+              presets={[0.5, 1.0, 1.5, 2.0]}
+              icon={<BoxSelect className="h-3.5 w-3.5 text-stone-500" />}
+            />
+            <div className="sm:col-span-2">
               <InDesignStepper
-                label="Tamaño Cuerpo"
-                value={config.bodyFontSizePt}
-                onChange={(bodyFontSizePt) => onChange({ bodyFontSizePt })}
-                min={4}
-                max={16}
-                step={0.25}
-                unit="pt"
-                presets={[5, 5.5, 6, 6.5, 7, 8]}
-                icon={<Type className="w-3.5 h-3.5 text-slate-600" />}
-              />
-
-              <InDesignStepper
-                label="Tamaño Título 1"
-                value={config.headerFontSizePt}
-                onChange={(headerFontSizePt) => onChange({ headerFontSizePt })}
-                min={5}
-                max={24}
-                step={0.5}
-                unit="pt"
-                presets={[7, 8, 9, 10, 12, 14]}
-                icon={<Type className="w-3.5 h-3.5 text-slate-600" />}
-              />
-
-              <InDesignStepper
-                label="Tamaño Título 2"
-                value={config.subheaderFontSizePt}
-                onChange={(subheaderFontSizePt) => onChange({ subheaderFontSizePt })}
-                min={4.5}
-                max={18}
-                step={0.5}
-                unit="pt"
-                presets={[5, 6, 6.5, 7, 8, 9]}
-                icon={<Type className="w-3.5 h-3.5 text-slate-600" />}
-              />
-
-              <InDesignStepper
-                label="Tamaño Tabla"
-                value={tableFontSizePt}
-                onChange={(tableFontSizePt) => onChange({ tableFontSizePt })}
-                min={3.5}
-                max={12}
-                step={0.25}
-                unit="pt"
-                presets={[4, 4.5, 5, 5.5, 6]}
-                icon={<Grid className="w-3.5 h-3.5 text-slate-600" />}
-              />
-
-              <InDesignStepper
-                label="Interlineado"
-                value={config.lineHeight}
-                onChange={(lineHeight) => onChange({ lineHeight })}
-                min={1.1}
-                max={1.8}
+                label="Espaciado entre letras"
+                value={config.letterSpacingMm ?? 0}
+                onChange={(letterSpacingMm) => onChange({ letterSpacingMm })}
+                min={-0.3}
+                max={0.3}
                 step={0.02}
-                unit=""
-                presets={[1.1, 1.15, 1.2, 1.25, 1.32]}
-                icon={<Grid className="w-3.5 h-3.5 text-slate-600" />}
+                unit="mm"
+                presets={[-0.15, -0.1, -0.05, 0, 0.05]}
+                icon={<Type className="h-3.5 w-3.5 text-stone-500" />}
               />
-
-              <div className="sm:col-span-2">
-                <InDesignStepper
-                  label="Grosor de Borde Negro"
-                  value={config.borderWidthPx}
-                  onChange={(borderWidthPx) => onChange({ borderWidthPx })}
-                  min={0.25}
-                  max={4}
-                  step={0.25}
-                  unit="px"
-                  presets={[0.5, 1.0, 1.5, 2.0]}
-                  icon={<BoxSelect className="w-3.5 h-3.5 text-slate-600" />}
-                />
-              </div>
             </div>
           </div>
-        </section>
+        </ControlGroup>
       </div>
+      {tableEditor && (
+        <TableEditorModal
+          initial={tableEditor.initial}
+          isExisting={tableEditor.block !== null}
+          fontFamily={config.fontFamily}
+          fontSizePt={tableFontSizePt}
+          onApply={applyTable}
+          onDelete={deleteTable}
+          onCancel={() => setTableEditor(null)}
+        />
+      )}
       {cropEditing && config.logoUrl && <LogoCropEditor
         src={config.originalLogoUrl || config.logoUrl} initialCrop={config.logoCrop}
         onCancel={() => setCropEditing(false)}

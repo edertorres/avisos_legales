@@ -1,1 +1,35 @@
 @import "tailwindcss";
+
+/*
+ * UI palette — "ink + one accent".
+ * Neutrals: Tailwind `stone` (warm paper/ink). Accent: teal, used only for primary
+ * actions, active states and focus. Amber = warnings, rose = errors/overflow.
+ * Change the accent here and the whole UI follows. The notice canvas itself
+ * is always pure black on white (print output) and does not use these tokens.
+ */
+@theme {
+  --color-accent-50: #f0fdfa;
+  --color-accent-100: #ccfbf1;
+  --color-accent-200: #99f6e4;
+  --color-accent-300: #5eead4;
+  --color-accent-400: #2dd4bf;
+  --color-accent-500: #14b8a6;
+  --color-accent-600: #0d9488;
+  --color-accent-700: #0f766e;
+  --color-accent-800: #115e59;
+  --color-accent-900: #134e4a;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-stone-100);
+    color: var(--color-stone-900);
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

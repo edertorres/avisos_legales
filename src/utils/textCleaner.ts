@@ -1,3 +1,23 @@
+import { createTableBlockRegex } from './tableMarkup';
+
+/** Replace whole ##table blocks (settings line included) with placeholders. */
+function protectTableBlocks(text: string, store: string[]): string {
+  return text.replace(createTableBlockRegex(), (block: string) => {
+    store.push(block);
+    return `___TABLE_BLOCK_${store.length - 1}___`;
+  });
+}
+
+/**
+ * Put the original blocks back on their own lines. A single line break is enough: tables
+ * render as blocks, so blank lines around them would show up as extra space in the notice.
+ */
+function restoreTableBlocks(text: string, store: string[]): string {
+  return text
+    .replace(/\s*___TABLE_BLOCK_(\d+)___\s*/g, (_match, idx: string) => `\n${store[parseInt(idx, 10)]}\n`)
+    .replace(/^\n+|\n+$/g, '');
+}
+
 /**
  * Strips all rich text formatting, HTML tags, and removes hard line breaks (\r\n, \n, \r),
  * un-hyphenates words broken at line ends, replaces tabs/extra spaces with a single space,
@@ -11,14 +31,9 @@ export function cleanPastedText(rawText: string): string {
   // Normalize line endings first
   const normalized = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // Extract ##table blocks before cleaning to preserve newlines/tabs inside them
+  // Set ##table blocks aside before cleaning to preserve their lines and settings
   const tableBlocks: string[] = [];
-  const TABLE_RE = /##table[ \t]*\n([\s\S]*?)##\/table/g;
-  let processed = normalized.replace(TABLE_RE, (_match, blockContent: string) => {
-    const idx = tableBlocks.length;
-    tableBlocks.push(blockContent);
-    return `___TABLE_BLOCK_${idx}___`;
-  });
+  let processed = protectTableBlocks(normalized, tableBlocks);
 
   // Clean the text (outside table blocks)
   processed = processed
@@ -35,9 +50,7 @@ export function cleanPastedText(rawText: string): string {
     .trim();
 
   // Restore table blocks
-  processed = processed.replace(/___TABLE_BLOCK_(\d+)___/g, (_match, idx: string) => {
-    return `\n\n##table\n${tableBlocks[parseInt(idx, 10)]}##\/table\n\n`;
-  });
+  processed = restoreTableBlocks(processed, tableBlocks);
 
   return processed
     .replace(/[ \t]*\n[ \t]*/g, '\n')
@@ -57,12 +70,7 @@ export function cleanPastedTextPreservingReturns(rawText: string): string {
   const normalized = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   const tableBlocks: string[] = [];
-  const TABLE_RE = /##table[ \t]*\n([\s\S]*?)##\/table/g;
-  let processed = normalized.replace(TABLE_RE, (_match, blockContent: string) => {
-    const idx = tableBlocks.length;
-    tableBlocks.push(blockContent);
-    return `___TABLE_BLOCK_${idx}___`;
-  });
+  let processed = protectTableBlocks(normalized, tableBlocks);
 
   processed = processed
     .replace(/<[^>]*>/g, '')
@@ -73,10 +81,7 @@ export function cleanPastedTextPreservingReturns(rawText: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  return processed
-    .replace(/___TABLE_BLOCK_(\d+)___/g, (_match, idx: string) => {
-      return `\n\n##table\n${tableBlocks[parseInt(idx, 10)]}##\/table\n\n`;
-    })
+  return restoreTableBlocks(processed, tableBlocks)
     .replace(/[ \t]*\n[ \t]*/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

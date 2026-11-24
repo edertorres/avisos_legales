@@ -1,23 +1,19 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Avisos Impresos PDF
 
-# Run and deploy your AI Studio app
-
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/08c22f97-110d-44e6-8a11-daaf064de123
+Maquetador de avisos legales y funerarios para prensa, con medidas exactas en centímetros
+y exportación PDF en escala de grises (DeviceGray/K) para rotativa.
 
 Manual de usuario: [MANUAL_USUARIO.md](MANUAL_USUARIO.md)
 
 ## Run Locally
 
-**Prerequisites:** Node.js, Typst CLI and Ghostscript (`gs`) available in your `PATH`
+**Prerequisites:** Node.js, Google Chrome/Chromium (for Puppeteer) and Ghostscript (`gs`) available in your `PATH`.
+WeasyPrint is optional (only for the experimental export).
 
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Optionally copy [.env.example](.env.example) to `.env.local` and adjust `DATA_DIR`.
 3. Run the app:
    `npm run dev`
 
@@ -37,7 +33,7 @@ For Coolify, use the included `Dockerfile`. Configure the public domain as:
 
 `https://avisos.rreditores.com`
 
-The Docker image installs Typst CLI, Ghostscript, WeasyPrint and the system fonts used by the PDF renderer
+The Docker image installs Chromium, Ghostscript, WeasyPrint and the system fonts used by the PDF renderer
 (`Roboto`, `Lato`, `Arimo`, `Tinos`, `Liberation` and `Noto` fallbacks).
 
 

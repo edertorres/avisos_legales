@@ -9,7 +9,10 @@ import { NoticeCanvas } from './NoticeCanvas';
 import { LogoCropEditor } from './LogoCropEditor';
 import { funeralConfigForRow, resolveFuneralLogo, logoResolutionLabel, type FuneralLogo } from '../utils/funeralLogos';
 import { readFuneralFile, rowsToNotices, FuneralRow } from '../utils/funeralImport';
-import { generateNoticePDF } from '../utils/pdfGenerator';
+import { generateNoticePDF, readServerError } from '../utils/pdfGenerator';
+import { downloadBlob } from '../utils/download';
+import * as ui from './ui';
+import { ControlGroup } from './ControlGroup';
 import { individualFuneralFilename } from '../utils/funeralFilenames';
 
 const initial: NoticeConfig = {
@@ -20,15 +23,12 @@ const initial: NoticeConfig = {
     condolences: 'y hacen llegar las más sinceras manifestaciones\nde condolencia a sus familiares y amigos.',
     borderGapMm: 0.5, borderColor: '#000000', blockGapMm: 1.2 },
 };
-const field = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-xs outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 disabled:bg-slate-100';
-const button = 'inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-xs transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:cursor-not-allowed disabled:opacity-40';
-const primary = `${button} !border-emerald-700 !bg-emerald-700 !text-white hover:!bg-emerald-800`;
-function ControlGroup({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
-  return <details open className="rounded-xl border border-slate-200 border-l-4 border-l-emerald-500 bg-white shadow-xs"><summary className="cursor-pointer px-4 py-3 text-xs font-black uppercase tracking-wide text-slate-800"><span className="inline-flex items-center gap-2 align-middle">{icon}{title}</span></summary><div className="space-y-3 border-t border-slate-100 p-4">{children}</div></details>;
-}
+const field = ui.field;
+const button = ui.btn.secondary;
+const primary = ui.btn.primary;
 const emptyRow = (): FuneralRow => ({ payer: '', deceased: '' });
 
-export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, loadedTemplate }: {
+function FuneralWorkspaceView({ sizes, onAddSize, templates, onSaveTemplate, loadedTemplate }: {
   sizes: SizeOption[]; onAddSize: (size: SizeOption) => void;
   loadedTemplate?: SavedNotice | null;
   templates: SavedNotice[]; onSaveTemplate: (name: string, config: NoticeConfig) => Promise<unknown>;
@@ -152,11 +152,8 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ design: { ...design, logoUrl: null }, rows, mode, logos: logos.filter(logo => rows.some(row => row.logoFile?.trim() === logo.name)).map(({ name, dataUrl }) => ({ name, dataUrl })) }),
       });
-      if (!response.ok) { const body = await response.json(); throw new Error(body.error || 'No se pudo generar el lote.'); }
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement('a'); link.href = url;
-      link.download = mode === 'combined' ? 'avisos-funerarios_K.pdf' : 'avisos-funerarios_individuales.zip';
-      link.click(); setTimeout(() => URL.revokeObjectURL(url), 10000);
+      if (!response.ok) throw new Error(await readServerError(response, 'No se pudo generar el lote.'));
+      downloadBlob(await response.blob(), mode === 'combined' ? 'avisos-funerarios_K.pdf' : 'avisos-funerarios_individuales.zip');
       setMessage('Lote generado y descargado.');
     } catch (error) { setMessage((error as Error).message, true); }
     finally { setBusy(false); }
@@ -173,22 +170,22 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
 
   return <main className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 lg:overflow-hidden">
     <div className="grid gap-4 lg:h-full lg:grid-cols-12">
-      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm order-2 lg:order-1 lg:col-span-5" aria-label="Controles del aviso funerario">
-        <div className="shrink-0 border-b border-slate-200 bg-white p-4">
-          <h1 className="flex items-center gap-2 text-sm font-black uppercase tracking-wide"><span className="rounded-lg bg-slate-950 p-2 text-emerald-300"><SlidersHorizontal className="h-4 w-4" /></span>Avisos funerarios</h1>
-          <div className="mt-3 flex gap-1 rounded-lg bg-slate-100 p-1" role="tablist" aria-label="Controles" onKeyDown={e => {
+      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-stone-50 shadow-sm order-2 lg:order-1 lg:col-span-5" aria-label="Controles del aviso funerario">
+        <div className="shrink-0 border-b border-stone-200 bg-white p-4">
+          <h1 className="flex items-center gap-2 text-sm font-semibold text-stone-800"><SlidersHorizontal className="h-4 w-4 text-stone-500" />Diseño del lote</h1>
+          <div className="mt-3 flex gap-1 rounded-lg bg-stone-100 p-1" role="tablist" aria-label="Controles" onKeyDown={e => {
             if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
             e.preventDefault();
             const next = e.key === 'Home' ? 'design' : e.key === 'End' ? 'batch' : panelTab === 'design' ? 'batch' : 'design';
             setPanelTab(next); document.getElementById(`funeral-${next}-tab`)?.focus();
           }}>
-            <button id="funeral-design-tab" tabIndex={panelTab === 'design' ? 0 : -1} role="tab" aria-selected={panelTab === 'design'} aria-controls="funeral-design-panel" className={`${button} flex-1 ${panelTab === 'design' ? '!border-emerald-200 !bg-white !text-emerald-800' : '!border-transparent !bg-transparent !shadow-none'}`} onClick={() => setPanelTab('design')}><SlidersHorizontal className="h-4 w-4" />Diseño y plantilla</button>
-            <button id="funeral-batch-tab" tabIndex={panelTab === 'batch' ? 0 : -1} role="tab" aria-selected={panelTab === 'batch'} aria-controls="funeral-batch-panel" className={`${button} flex-1 ${panelTab === 'batch' ? '!border-emerald-200 !bg-white !text-emerald-800' : '!border-transparent !bg-transparent !shadow-none'}`} onClick={() => setPanelTab('batch')}><Layers className="h-4 w-4" />Importación y logos</button>
+            <button id="funeral-design-tab" tabIndex={panelTab === 'design' ? 0 : -1} role="tab" aria-selected={panelTab === 'design'} aria-controls="funeral-design-panel" className={`${button} flex-1 ${panelTab === 'design' ? '!border-accent-200 !bg-white !text-accent-800' : '!border-transparent !bg-transparent !shadow-none'}`} onClick={() => setPanelTab('design')}><SlidersHorizontal className="h-4 w-4" />Diseño y plantilla</button>
+            <button id="funeral-batch-tab" tabIndex={panelTab === 'batch' ? 0 : -1} role="tab" aria-selected={panelTab === 'batch'} aria-controls="funeral-batch-panel" className={`${button} flex-1 ${panelTab === 'batch' ? '!border-accent-200 !bg-white !text-accent-800' : '!border-transparent !bg-transparent !shadow-none'}`} onClick={() => setPanelTab('batch')}><Layers className="h-4 w-4" />Importación y logos</button>
           </div>
         </div>
         <div className="space-y-4 p-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
           <div id="funeral-design-panel" role="tabpanel" aria-labelledby="funeral-design-tab" hidden={panelTab !== 'design'}>
-            <p className="mb-3 rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-xs text-emerald-900">El diseño se aplica a todo el lote. Modificarlo requiere revisar los avisos de nuevo.</p>
+            <p className="mb-3 rounded-lg border border-accent-100 bg-accent-50 p-3 text-xs text-accent-900">El diseño se aplica a todo el lote. Modificarlo requiere revisar los avisos de nuevo.</p>
             <fieldset disabled={busy} className="space-y-3">
               <ControlGroup title="Plantillas" icon={<FileText className="h-4 w-4" />}>
           <label className="block text-sm">Plantilla<select className={field} defaultValue="" onChange={e => {
@@ -230,13 +227,13 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
             {numberField('Grosor de cada línea (pt)', Number((design.borderWidthPx * 0.75).toFixed(3)), n => changeDesign({ borderWidthPx: n / 0.75 }), 0.15, 6, 0.05)}
             {numberField('Separación (mm)', design.funeral!.borderGapMm, n => changeFuneral({ borderGapMm: n }), 0, 10)}
             <label className="text-xs">Color<input className={field} type="color" value={design.funeral!.borderColor} onChange={e => changeFuneral({ borderColor: e.target.value })} /></label>
-          </div><p className="text-xs text-slate-500">El PDF conserva la salida de imprenta en escala de grises; el color se convierte a su tono gris.</p>
+          </div><p className="text-xs text-stone-500">El PDF conserva la salida de imprenta en escala de grises; el color se convierte a su tono gris.</p>
 
               </ControlGroup>
               <ControlGroup title="Posición y tamaño del logo" icon={<ImageIcon className="h-4 w-4" />}>
           
-          <p className="text-xs text-slate-600">Estos ajustes se aplican a todo el lote y se guardan en la plantilla. La imagen se asigna a cada anunciante durante la revisión.</p>
-          <div className="space-y-3 rounded border border-slate-200 p-3">
+          <p className="text-xs text-stone-600">Estos ajustes se aplican a todo el lote y se guardan en la plantilla. La imagen se asigna a cada anunciante durante la revisión.</p>
+          <div className="space-y-3 rounded border border-stone-200 p-3">
             <div className="grid grid-cols-2 gap-2">
               <label className="text-xs">Posición<select className={field} value={design.funeral!.logoPosition || 'top-center'} onChange={e => changeFuneral({ logoPosition: e.target.value as FuneralDesign['logoPosition'] })}>
                 <option value="left">Izquierda</option><option value="right">Derecha</option><option value="top-center">Arriba centrado</option><option value="bottom-center">Abajo centrado</option>
@@ -249,27 +246,27 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
               {numberField('Desplazamiento horizontal (mm)', design.funeral!.logoOffsetXMm ?? 0, n => changeFuneral({ logoOffsetXMm: n }), -30, 30)}
               {numberField('Desplazamiento vertical (mm)', design.funeral!.logoOffsetYMm ?? 0, n => changeFuneral({ logoOffsetYMm: n }), -30, 30)}
             </div>
-            <p className="text-xs text-slate-500">El logo ocupa una fila propia. La referencia determina el ancho para alinearlo. Los valores positivos desplazan a la derecha y hacia abajo; los negativos, a la izquierda y hacia arriba.</p>
+            <p className="text-xs text-stone-500">El logo ocupa una fila propia. La referencia determina el ancho para alinearlo. Los valores positivos desplazan a la derecha y hacia abajo; los negativos, a la izquierda y hacia arriba.</p>
             <button className={button} onClick={() => changeFuneral({ logoOffsetXMm: 0, logoOffsetYMm: 0 })}>Restablecer desplazamientos</button>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={design.grayscaleLogo} onChange={e => changeDesign({ grayscaleLogo: e.target.checked })} /> Vista previa del logo en escala de grises</label>
           </div>
 
               </ControlGroup>
               <ControlGroup title="Cruz opcional" icon={<BoxSelect className="h-4 w-4" />}>
-                <p className="text-xs text-slate-500">Negra, de dos trazos. Los ajustes se guardan en la plantilla; se activa individualmente durante la revisión.</p>
+                <p className="text-xs text-stone-500">Negra, de dos trazos. Los ajustes se guardan en la plantilla; se activa individualmente durante la revisión.</p>
                 <div className="grid grid-cols-2 gap-2">
                   {numberField('Altura de la cruz (mm)', design.funeral!.crossHeightMm ?? 6, n => changeFuneral({ crossHeightMm: n }), 2, 20)}
                   {numberField('Grosor de la cruz (pt)', design.funeral!.crossStrokePt ?? 0.5, n => changeFuneral({ crossStrokePt: n }), 0.2, 3, 0.05)}
                   {numberField('Separación adicional (mm)', design.funeral!.crossInsetMm ?? 0, n => changeFuneral({ crossInsetMm: n }), 0, 10)}
                 </div>
-                <p className="text-xs text-slate-500">La separación se suma al margen interior del anuncio.</p>
+                <p className="text-xs text-stone-500">La separación se suma al margen interior del anuncio.</p>
               </ControlGroup>
             </fieldset>
           </div>
           <div id="funeral-batch-panel" role="tabpanel" aria-labelledby="funeral-batch-tab" hidden={panelTab !== 'batch'} className="space-y-3">
             <ControlGroup title="Importar XLSX o CSV" icon={<Layers className="h-4 w-4" />}>
         
-        <p className="text-xs text-slate-600">XLSX (primera hoja) o CSV con coma o punto y coma. Una fila por aviso, hasta 200.</p>
+        <p className="text-xs text-stone-600">XLSX (primera hoja) o CSV con coma o punto y coma. Una fila por aviso, hasta 200.</p>
         <input className={field} disabled={busy} type="file" accept=".xlsx,.csv" aria-label="Importar lote" onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ''; }} />
         {importRows && <fieldset disabled={busy} className="space-y-2 rounded border p-3">
           <label className="text-sm"><input type="checkbox" checked={hasHeader} onChange={e => setHasHeader(e.target.checked)} /> La primera fila contiene encabezados</label>
@@ -285,7 +282,7 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
             </ControlGroup>
             <ControlGroup title="Logos por anunciante" icon={<ImageIcon className="h-4 w-4" />}>
         
-        <p className="text-xs text-slate-600">Carga los archivos juntos. El nombre completo debe coincidir exactamente con la columna logo, incluidas mayúsculas y extensión. PNG, JPEG o WebP; hasta 5 MB por imagen y 15 MB en total.</p>
+        <p className="text-xs text-stone-600">Carga los archivos juntos. El nombre completo debe coincidir exactamente con la columna logo, incluidas mayúsculas y extensión. PNG, JPEG o WebP; hasta 5 MB por imagen y 15 MB en total.</p>
         <input className={field} type="file" multiple disabled={busy} accept="image/png,image/jpeg,image/webp" aria-label="Cargar logos del lote" onChange={e => { void uploadLogos(Array.from(e.target.files || [])); e.target.value = ''; }} />
         <ul className="max-h-48 space-y-2 overflow-auto">{logos.map(logo => <li key={logo.id} className="flex items-center gap-2 rounded border p-2 text-sm">
           <img src={logo.dataUrl} alt={logo.name} className="h-10 w-12 object-contain" />
@@ -297,12 +294,12 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
           </div>
         </div>
       </section>
-      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm order-1 lg:order-2 lg:col-span-7" aria-label="Vista previa y revisión">
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-          <h2 className="flex items-center gap-2 text-sm font-black uppercase tracking-wide"><span className="rounded-lg bg-slate-950 p-2 text-emerald-300"><Ruler className="h-4 w-4" /></span>Vista previa</h2>
-          <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm order-1 lg:order-2 lg:col-span-7" aria-label="Vista previa y revisión">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-stone-200 px-4 py-3">
+          <h2 className="text-sm font-semibold text-stone-800">Vista previa</h2>
+          <div className="flex items-center gap-1 rounded-lg border border-stone-200 bg-stone-50 p-1">
             <button className={button} aria-label="Alejar vista" disabled={zoom <= 0.1} onClick={() => { setAutoZoom(false); setZoom(z => Math.max(0.1, Number((z - 0.25).toFixed(2)))); }}><ZoomOut className="h-4 w-4" /></button>
-            <span className="w-12 text-center font-mono text-xs font-bold">{Math.round(zoom * 100)}%</span>
+            <span className="w-12 text-center text-xs font-medium tabular-nums text-stone-700">{Math.round(zoom * 100)}%</span>
             <button className={button} aria-label="Acercar vista" disabled={zoom >= 3} onClick={() => { setAutoZoom(false); setZoom(z => Math.min(3, Number((z + 0.25).toFixed(2)))); }}><ZoomIn className="h-4 w-4" /></button>
             <button className={button} onClick={() => { setAutoZoom(false); setZoom(1); }}>100%</button>
             <button className={button} aria-pressed={autoZoom} onClick={() => setAutoZoom(true)}>Ajustar</button>
@@ -310,50 +307,50 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
         </div>
         <div className="min-h-0 space-y-4 p-4 lg:flex-1 lg:overflow-y-auto">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2"><button className={button} aria-label="Aviso anterior" disabled={busy || selected === 0} onClick={() => selectRow(selected - 1)}><ChevronLeft className="h-4 w-4" /></button><span className="text-sm font-bold">Aviso {selected + 1} de {rows.length}</span><button className={button} aria-label="Aviso siguiente" disabled={busy || selected === rows.length - 1} onClick={() => selectRow(selected + 1)}><ChevronRight className="h-4 w-4" /></button></div>
-            <span className={`rounded-full px-3 py-1 text-xs font-bold ${reviewed.includes(selected) ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{reviewed.includes(selected) ? 'Revisado' : 'Pendiente de revisión'}</span>
+            <div className="flex items-center gap-2"><button className={button} aria-label="Aviso anterior" disabled={busy || selected === 0} onClick={() => selectRow(selected - 1)}><ChevronLeft className="h-4 w-4" /></button><span className="text-sm font-medium">Aviso {selected + 1} de {rows.length}</span><button className={button} aria-label="Aviso siguiente" disabled={busy || selected === rows.length - 1} onClick={() => selectRow(selected + 1)}><ChevronRight className="h-4 w-4" /></button></div>
+            <span className={`rounded-full px-3 py-1 text-xs font-medium ${reviewed.includes(selected) ? 'bg-accent-50 text-accent-700' : 'bg-amber-50 text-amber-700'}`}>{reviewed.includes(selected) ? 'Revisado' : 'Pendiente de revisión'}</span>
           </div>
           <div className="space-y-3">
-        <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm"><input type="checkbox" disabled={busy} checked={rows[selected].crossEnabled === true} onChange={e => changeRow(selected, { crossEnabled: e.target.checked })} />Incluir cruz en este aviso</label>
+        <label className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3 text-sm"><input type="checkbox" disabled={busy} checked={rows[selected].crossEnabled === true} onChange={e => changeRow(selected, { crossEnabled: e.target.checked })} />Incluir cruz en este aviso</label>
         <label className="block text-sm">Anunciante (opcional)<input className={field} disabled={busy} value={rows[selected].payer} onChange={e => changeRow(selected, { payer: e.target.value })} /></label>
         <label className="block text-sm">Fallecido (obligatorio)<input aria-required="true" className={field} disabled={busy} value={rows[selected].deceased} onChange={e => changeRow(selected, { deceased: e.target.value })} /></label>
-        <section aria-label="Logo de este aviso" className="rounded-lg border border-slate-200 bg-slate-50">
-          <h3 className="px-3 py-2 text-xs font-bold">Logo de este aviso · {logoResolutionLabel(currentLogo.status)}{rows[selected].logoFile ? ` · ${rows[selected].logoFile}` : ''}</h3>
-        <fieldset disabled={busy} className="space-y-2 border-t border-slate-200 p-3">
+        <section aria-label="Logo de este aviso" className="rounded-lg border border-stone-200 bg-stone-50">
+          <h3 className="px-3 py-2 text-xs font-medium">Logo de este aviso · {logoResolutionLabel(currentLogo.status)}{rows[selected].logoFile ? ` · ${rows[selected].logoFile}` : ''}</h3>
+        <fieldset disabled={busy} className="space-y-2 border-t border-stone-200 p-3">
           <label className="block text-sm">Archivo de logo del anunciante<input className={field} list="funeral-logo-files" placeholder="empresa-abc.png (vacío: sin logo)" value={rows[selected].logoFile || ''} onChange={e => changeRow(selected, { logoFile: e.target.value })} /></label>
           <datalist id="funeral-logo-files">{[...new Set(logos.map(logo => logo.name))].map(name => <option key={name} value={name} />)}</datalist>
-          <p role="status" className={`text-sm ${currentLogo.status === 'missing' || currentLogo.status === 'duplicate' ? 'font-semibold text-red-700' : 'text-slate-600'}`}>{logoResolutionLabel(currentLogo.status)}{rows[selected].logoFile?.trim() ? `: ${rows[selected].logoFile.trim()}` : ''}</p>
+          <p role="status" className={`text-sm ${currentLogo.status === 'missing' || currentLogo.status === 'duplicate' ? 'font-semibold text-red-700' : 'text-stone-600'}`}>{logoResolutionLabel(currentLogo.status)}{rows[selected].logoFile?.trim() ? `: ${rows[selected].logoFile.trim()}` : ''}</p>
           {currentLogo.status === 'ready' && <img src={config.logoUrl || currentLogo.dataUrl} alt={`Logo de ${rows[selected].payer}`} className="max-h-20 max-w-32 object-contain" />}
           <div className="flex flex-wrap gap-2">
             <button className={primary} disabled={currentLogo.status !== 'ready'} onClick={() => setCropEditing(true)}>Recortar logo</button>
             {rows[selected].croppedLogoUrl && <button className={button} onClick={() => changeRow(selected, { croppedLogoUrl: undefined, logoCrop: undefined })}>Restablecer logo original</button>}
           </div>
-          {currentLogo.status !== 'ready' && <p className="text-xs text-slate-600">Carga y asigna un logo a este aviso para habilitar el recorte.</p>}
+          {currentLogo.status !== 'ready' && <p className="text-xs text-stone-600">Carga y asigna un logo a este aviso para habilitar el recorte.</p>}
           <label className="block text-sm">Cargar y asignar un logo a este aviso<input className={field} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { void uploadLogos(Array.from(e.target.files || []), true); e.target.value = ''; }} /></label>
           <button className={button} onClick={() => changeRow(selected, { logoFile: '' })}>Sin logo para este aviso</button>
         </fieldset>
         </section>
           </div>
-          <div className="flex items-center justify-between gap-2 text-xs text-slate-500"><span className="font-mono font-bold">{config.size.widthCm} × {config.size.heightCm} cm</span><label className="flex items-center gap-2"><input type="checkbox" checked={showGuides} onChange={e => setShowGuides(e.target.checked)} />Guías de margen</label></div>
-          <div ref={previewAreaRef} className="flex min-h-56 items-start overflow-auto rounded-xl border border-slate-200 bg-slate-100 p-5" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '12px 12px' }}>
+          <div className="flex items-center justify-between gap-2 text-xs text-stone-500"><span className={ui.chip.neutral}>{config.size.widthCm} × {config.size.heightCm} cm</span><label className="flex items-center gap-2"><input type="checkbox" checked={showGuides} onChange={e => setShowGuides(e.target.checked)} />Guías de margen</label></div>
+          <div ref={previewAreaRef} className="flex min-h-56 items-start overflow-auto rounded-xl border border-stone-200 bg-stone-100 p-5" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '12px 12px' }}>
             <div className="mx-auto shrink-0" style={{ width: config.size.widthCm * 37.795 * zoom, height: config.size.heightCm * 37.795 * zoom }}><NoticeCanvas config={config} zoomScale={zoom} showMarginGuides={showGuides} onOverflowStatusChange={setOverflow} /></div>
           </div>
-          {overflow?.isOverflowing && <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-900">El contenido no cabe. Ajusta dimensiones, márgenes o tipografía desde el panel de diseño.</p>}
+          {overflow?.isOverflowing && <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-900">El contenido no cabe. Ajusta dimensiones, márgenes o tipografía desde el panel de diseño.</p>}
           <div className="flex flex-wrap gap-2">
             <button className={primary} disabled={busy || currentLogo.status === 'missing' || currentLogo.status === 'duplicate' || !rows[selected].deceased.trim() || !overflow || overflow.isOverflowing} onClick={() => { setReviewed(prev => [...new Set([...prev, selected])]); const next = rows.findIndex((_, index) => index !== selected && !reviewed.includes(index)); if (next >= 0) selectRow(next); }}><CheckCheck className="h-4 w-4" />Marcar revisado y continuar</button>
             <button className={button} disabled={busy || rows.length >= 200} onClick={() => { setRows(prev => [...prev, emptyRow()]); setSelected(rows.length); setOverflow(null); }}>Añadir aviso</button>
             <button className={`${button} !text-rose-700`} disabled={busy || rows.length === 1} onClick={() => { setRows(prev => prev.filter((_, i) => i !== selected)); setSelected(Math.max(0, selected - 1)); setReviewed([]); setOverflow(null); }}>Eliminar aviso</button>
           </div>
-          <div className="border-t border-slate-200 pt-4">
-            <div className="mb-3 flex flex-wrap gap-2"><label className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input className={`${field} !pl-9`} placeholder="Buscar anunciante, fallecido o logo…" aria-label="Buscar avisos" value={search} onChange={e => setSearch(e.target.value)} /></label><select className={`${field} !w-auto`} aria-label="Filtrar avisos" value={filter} onChange={e => setFilter(e.target.value as typeof filter)}><option value="all">Todos</option><option value="pending">Sin revisar</option><option value="issues">Con pendientes</option></select></div>
-            <div className="max-h-56 overflow-auto rounded-lg border border-slate-200"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-slate-50 text-slate-600"><tr>{['Aviso', 'Anunciante', 'Fallecido', 'Logo', 'Estado'].map(title => <th key={title} className="px-3 py-2 font-bold">{title}</th>)}</tr></thead><tbody>{visibleRows.map(({ row, index }) => <tr key={index} className={`border-t border-slate-100 ${selected === index ? 'bg-emerald-50' : 'hover:bg-slate-50'}`}><td className="px-3 py-2"><button className="font-bold text-emerald-800 underline focus-visible:outline-2" disabled={busy} aria-label={`Revisar aviso ${index + 1}`} aria-current={selected === index ? 'true' : undefined} onClick={() => selectRow(index)}>{index + 1}</button></td><td className="px-3 py-2">{row.payer || <span className="text-slate-400">Sin nombre</span>}</td><td className="px-3 py-2">{row.deceased || <span className="text-rose-700">Falta nombre</span>}</td><td className="max-w-32 px-3 py-2"><span className="block break-all">{row.logoFile || '—'}</span><span className={['missing', 'duplicate'].includes(logoStates[index].status) ? 'font-bold text-rose-700' : 'text-slate-500'}>{logoResolutionLabel(logoStates[index].status)}</span></td><td className="px-3 py-2"><span className={`rounded-full px-2 py-1 font-bold ${reviewed.includes(index) ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>{reviewed.includes(index) ? 'Revisado' : 'Pendiente'}</span></td></tr>)}</tbody></table>{visibleRows.length === 0 && <p className="p-4 text-center text-sm text-slate-500">No hay avisos que coincidan con el filtro.</p>}</div>
+          <div className="border-t border-stone-200 pt-4">
+            <div className="mb-3 flex flex-wrap gap-2"><label className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-stone-400" /><input className={`${field} !pl-9`} placeholder="Buscar anunciante, fallecido o logo…" aria-label="Buscar avisos" value={search} onChange={e => setSearch(e.target.value)} /></label><select className={`${field} !w-auto`} aria-label="Filtrar avisos" value={filter} onChange={e => setFilter(e.target.value as typeof filter)}><option value="all">Todos</option><option value="pending">Sin revisar</option><option value="issues">Con pendientes</option></select></div>
+            <div className="max-h-56 overflow-auto rounded-lg border border-stone-200"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-stone-50 text-stone-600"><tr>{['Aviso', 'Anunciante', 'Fallecido', 'Logo', 'Estado'].map(title => <th key={title} className="px-3 py-2 font-medium">{title}</th>)}</tr></thead><tbody>{visibleRows.map(({ row, index }) => <tr key={index} className={`border-t border-stone-100 ${selected === index ? 'bg-accent-50' : 'hover:bg-stone-50'}`}><td className="px-3 py-2"><button className="font-medium text-accent-800 underline focus-visible:outline-2" disabled={busy} aria-label={`Revisar aviso ${index + 1}`} aria-current={selected === index ? 'true' : undefined} onClick={() => selectRow(index)}>{index + 1}</button></td><td className="px-3 py-2">{row.payer || <span className="text-stone-400">Sin nombre</span>}</td><td className="px-3 py-2">{row.deceased || <span className="text-rose-700">Falta nombre</span>}</td><td className="max-w-32 px-3 py-2"><span className="block break-all">{row.logoFile || '—'}</span><span className={['missing', 'duplicate'].includes(logoStates[index].status) ? 'font-medium text-rose-700' : 'text-stone-500'}>{logoResolutionLabel(logoStates[index].status)}</span></td><td className="px-3 py-2"><span className={`rounded-full px-2 py-1 font-medium ${reviewed.includes(index) ? 'bg-accent-100 text-accent-800' : 'bg-amber-50 text-amber-800'}`}>{reviewed.includes(index) ? 'Revisado' : 'Pendiente'}</span></td></tr>)}</tbody></table>{visibleRows.length === 0 && <p className="p-4 text-center text-sm text-stone-500">No hay avisos que coincidan con el filtro.</p>}</div>
           </div>
         </div>
-        <div className="shrink-0 border-t border-slate-200 bg-white p-4">
-          <div className="mb-3 flex items-center justify-between gap-3 text-xs"><span className="font-bold text-slate-700">{reviewed.length} / {rows.length} revisados</span><span className={invalid ? 'text-amber-700' : 'text-slate-500'}>{exportHint}</span></div>
-          <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label="Revisión del lote" aria-valuemin={0} aria-valuemax={rows.length} aria-valuenow={reviewed.length}><div className="h-full bg-emerald-500 transition-all" style={{ width: `${reviewed.length / rows.length * 100}%` }} /></div>
+        <div className="shrink-0 border-t border-stone-200 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between gap-3 text-xs"><span className="font-medium text-stone-700">{reviewed.length} / {rows.length} revisados</span><span className={invalid ? 'text-amber-700' : 'text-stone-500'}>{exportHint}</span></div>
+          <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-stone-100" role="progressbar" aria-label="Revisión del lote" aria-valuemin={0} aria-valuemax={rows.length} aria-valuenow={reviewed.length}><div className="h-full bg-accent-500 transition-all" style={{ width: `${reviewed.length / rows.length * 100}%` }} /></div>
           <div className="flex flex-wrap gap-2"><button className={primary} disabled={busy || invalid || reviewed.length !== rows.length} onClick={() => exportBatch('combined')}><Download className="h-4 w-4" />{busy ? 'Procesando…' : rows.length === 1 ? 'Descargar PDF' : 'PDF multipágina'}</button><button className={button} disabled={busy || invalid || reviewed.length !== rows.length} onClick={() => exportBatch('individual')}>PDF individuales (ZIP)</button></div>
-          {message && <p role={messageIsError ? 'alert' : 'status'} className={`mt-3 rounded-lg border p-3 text-xs ${messageIsError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{message}</p>}
+          {message && <p role={messageIsError ? 'alert' : 'status'} className={`mt-3 rounded-lg border p-3 text-xs ${messageIsError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-stone-200 bg-stone-50 text-stone-700'}`}>{message}</p>}
         </div>
       </section>
     </div>
@@ -364,3 +361,6 @@ export function FuneralWorkspace({ sizes, onAddSize, templates, onSaveTemplate, 
     />}
   </main>;
 }
+
+/** Memoized: it stays mounted (hidden) while the legal editor is active, so it must not re-render on every keystroke there. */
+export const FuneralWorkspace = React.memo(FuneralWorkspaceView);

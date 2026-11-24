@@ -4,6 +4,7 @@ import { zipSync } from 'fflate';
 import { SharedLibraryStore } from './sharedLibraryStore';
 import { isSavedNotice, isGeneratedLogEntry, isNoticeConfig } from './src/types/sharedLibrary';
 import { parseFormattedText, FormattedText } from './src/utils/textFormatting';
+import { createTableBlockRegex, parseTableBlock, TABLE_BLOCK_SOURCE } from './src/utils/tableMarkup';
 import express from 'express';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -323,60 +324,25 @@ function renderTextWithLineBreaksHtml(value: string): string {
   return value.split('\n').map(preserveLegalNoBreaksHtml).join('<br>');
 }
 
-function splitTableRow(line: string, forceSeparator?: '|' | '\t' | ','): string[] {
-  const trimmed = line.trim();
-  if (!trimmed) return [];
-
-  if (!forceSeparator) {
-    const pipeCount = (trimmed.match(/\|/g) || []).length;
-    const tabCount = (trimmed.match(/\t/g) || []).length;
-    const commaCount = (trimmed.match(/,/g) || []).length;
-
-    if (pipeCount > 0 && pipeCount >= tabCount && pipeCount >= commaCount) {
-      forceSeparator = '|';
-    } else if (tabCount > 0 && tabCount >= commaCount) {
-      forceSeparator = '\t';
-    } else if (commaCount > 0) {
-      forceSeparator = ',';
-    } else {
-      return [trimmed];
-    }
-  }
-
-  return trimmed.split(forceSeparator).map((cell) => cell.trim());
-}
-
 function getTableFontSizePt(config: NoticeConfig): number {
   return config.tableFontSizePt ?? Number(Math.max(4, config.bodyFontSizePt * 0.85).toFixed(2));
 }
 
-function renderTableHtml(blockContent: string, fontFamily: string, tableFontSizePt: number): string {
-  const normalized = blockContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const lines = normalized.split('\n').filter((line) => line.trim() !== '');
-  if (lines.length < 1) return '';
+function renderTableHtml(optionsLine: string, blockContent: string, fontFamily: string, tableFontSizePt: number): string {
+  const model = parseTableBlock(optionsLine, blockContent);
+  if (!model) return '';
 
-  const firstLine = lines[0].trim();
-  let sep: '|' | '\t' | ',' | undefined;
-  if (firstLine.includes('|')) sep = '|';
-  else if (firstLine.includes('\t')) sep = '\t';
-  else if (firstLine.includes(',')) sep = ',';
-
-  const headers = splitTableRow(lines[0], sep);
-  if (headers.length === 0) return '';
-
-  const rows = lines.slice(1).map((line) => splitTableRow(line, sep)).filter((row) => row.length > 0);
+  const [headerRow, ...bodyRows] = model.header ? model.rows : [undefined, ...model.rows];
   const escapedFont = escapeCssString(fontFamily);
+  const cell = (tag: 'th' | 'td', value: string, column: number) =>
+    `<${tag} class="align-${model.align[column] ?? 'center'}">${escapeHtml(value)}</${tag}>`;
 
   return `
     <div class="notice-table-wrap">
-      <table class="notice-table" style="font-family: ${escapedFont}; font-size: ${tableFontSizePt}pt;">
-        <thead>
-          <tr>${headers.map((header, index) => `<th class="${index === 0 ? 'text-left' : ''}">${escapeHtml(header)}</th>`).join('')}</tr>
-        </thead>
+      <table class="notice-table${model.width === 'full' ? ' notice-table-full' : ''}" style="font-family: ${escapedFont}; font-size: ${tableFontSizePt}pt;">
+        ${headerRow ? `<thead><tr>${headerRow.map((value, column) => cell('th', value, column)).join('')}</tr></thead>` : ''}
         <tbody>
-          ${rows.map((row) => `
-            <tr>${Array.from({ length: headers.length }, (_unused, index) => `<td class="${index === 0 ? 'text-left' : ''}">${escapeHtml(row[index] || '')}</td>`).join('')}</tr>
-          `).join('')}
+          ${bodyRows.map((row) => `<tr>${row!.map((value, column) => cell('td', value, column)).join('')}</tr>`).join('')}
         </tbody>
       </table>
     </div>
@@ -476,7 +442,7 @@ function renderBodyHtml(
   usedBodyImageIds: Set<string> = new Set(),
   maxBodyImageWidthMm: number = 25,
 ): string {
-  const blockRe = /##table[ \t]*\r?\n([\s\S]*?)##\/table|##image:([A-Za-z0-9_-]+)|##imagen:(\d+)/g;
+  const blockRe = new RegExp(`${TABLE_BLOCK_SOURCE}|##image:([A-Za-z0-9_-]+)|##imagen:(\\d+)`, 'g');
   let html = '';
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -495,13 +461,13 @@ function renderBodyHtml(
   while ((match = blockRe.exec(value)) !== null) {
     if (match.index > lastIndex) html += renderTextChunk(value.slice(lastIndex, match.index));
 
-    if (match[1] !== undefined) {
-      html += renderTableHtml(match[1], fontFamily, tableFontSizePt);
+    if (match[2] !== undefined) {
+      html += renderTableHtml(match[1], match[2], fontFamily, tableFontSizePt);
     } else {
-      const imageSlot = match[3] ? parseInt(match[3], 10) : null;
+      const imageSlot = match[4] ? parseInt(match[4], 10) : null;
       const image = imageSlot
         ? bodyImages.find((item, index) => (item.slot || index + 1) === imageSlot)
-        : bodyImages.find((item) => item.id === match?.[2]);
+        : bodyImages.find((item) => item.id === match?.[3]);
       if (image) {
         usedBodyImageIds.add(image.id);
         html += renderBodyImageHtml(image, maxBodyImageWidthMm);
@@ -509,6 +475,12 @@ function renderBodyHtml(
     }
 
     lastIndex = match.index + match[0].length;
+    // The line break after ##/table only ends the marker line; a table is already a block,
+    // so rendering that break would add a blank line below every table.
+    if (match[2] !== undefined) {
+      if (value.startsWith('\r\n', lastIndex)) lastIndex += 2;
+      else if (value.startsWith('\n', lastIndex)) lastIndex += 1;
+    }
   }
 
   if (lastIndex < value.length) html += renderTextChunk(value.slice(lastIndex));
@@ -689,26 +661,29 @@ function buildWeasyNoticeHtml(config: NoticeConfig, grayProfilePath: string | nu
       width: auto;
       max-width: 100%;
       border-collapse: collapse;
-      line-height: 1.15;
+      line-height: 1.2;
       margin: 0;
       table-layout: auto;
     }
-    .notice-table th {
-      border: 0.03px solid black;
-      border-color: ${blackColor};
-      padding: 1px 2px;
-      text-align: center;
-      font-weight: 700;
-      white-space: nowrap;
+    .notice-table.notice-table-full {
+      display: table;
+      width: 100%;
     }
+    .notice-table th,
     .notice-table td {
-      padding: 1px 2px;
-      text-align: center;
-      border: 0.03px solid black;
+      border: 0.25pt solid black;
       border-color: ${blackColor};
-      white-space: nowrap;
+      /* Same as the canvas: a little more room above (caps/figures leave descender space empty). */
+      padding: 0.7pt 2pt 0.45pt;
+      white-space: normal;
+      overflow-wrap: break-word;
+      word-break: normal;
+      vertical-align: middle;
     }
-    .notice-table .text-left { text-align: left; }
+    .notice-table th { font-weight: 700; }
+    .notice-table .align-left { text-align: left; }
+    .notice-table .align-center { text-align: center; }
+    .notice-table .align-right { text-align: right; }
     .body-images {
       margin-top: 2pt;
     }
@@ -808,7 +783,7 @@ async function renderPdfViaWeasyPrint(config: NoticeConfig, tempDir: string): Pr
 }
 
 function noticeContainsTable(config: NoticeConfig): boolean {
-  return /##table[ \t]*\r?\n[\s\S]*?##\/table/.test(config.bodyText || '');
+  return createTableBlockRegex().test(config.bodyText || '');
 }
 
 async function verifyGrayPdfWithInkcov(outputPath: string): Promise<void> {
@@ -943,8 +918,15 @@ async function renderPdfViaApp(config: NoticeConfig, sharedBrowser?: Awaited<Ret
         scrollHeight,
         clientHeight,
         overflowPx: Math.max(0, scrollHeight - clientHeight),
+        overflowWidthPx: Math.max(0, element.scrollWidth - element.clientWidth),
       };
     });
+
+    if (overflow.overflowWidthPx > 1) {
+      throw new PdfOverflowError(
+        `Una tabla es ${(overflow.overflowWidthPx / 3.7795).toFixed(1)} mm más ancha que el aviso. Reduce el tamaño de tabla o acorta palabras antes de exportar.`,
+      );
+    }
 
     if (overflow.overflowPx > 1) {
       throw new PdfOverflowError(

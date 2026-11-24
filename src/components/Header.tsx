@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
-import { Download, RotateCcw, Sparkles, Printer, AlertTriangle, BookOpen, X, Upload, Save, FolderOpen, FileDown, FileUp, History } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { RotateCcw, Sparkles, Printer, BookOpen, Upload, Save, FolderOpen, FileDown, FileUp, History, MoreHorizontal, FlaskConical } from 'lucide-react';
 import manualText from '../../MANUAL_USUARIO.md?raw';
+import { ModalShell } from './ModalShell';
+import * as ui from './ui';
 
 interface HeaderProps {
   onLoadSample: () => void;
   onReset: () => void;
-  onExportPdf: () => void;
   onExportWeasyPdf: () => void;
   onOpenGrayPdfConverter: () => void;
   onSaveNotice: () => void;
@@ -13,7 +14,6 @@ interface HeaderProps {
   onOpenGeneratedLog: () => void;
   onExportNoticeJson: () => void;
   onImportNoticeJson: () => void;
-  isExporting: boolean;
   isWeasyExporting: boolean;
   isOverflowing: boolean;
 }
@@ -28,7 +28,7 @@ function renderManualMarkdown(markdown: string) {
 
     if (trimmed.startsWith('# ')) {
       return (
-        <h1 key={index} className="mt-1 mb-3 text-xl font-black text-slate-950">
+        <h1 key={index} className="mt-1 mb-3 text-xl font-semibold text-stone-900">
           {trimmed.replace(/^#\s+/, '')}
         </h1>
       );
@@ -36,7 +36,7 @@ function renderManualMarkdown(markdown: string) {
 
     if (trimmed.startsWith('## ')) {
       return (
-        <h2 key={index} className="mt-5 mb-2 border-b border-slate-200 pb-1 text-sm font-extrabold uppercase tracking-wide text-slate-900">
+        <h2 key={index} className="mt-6 mb-2 border-b border-stone-200 pb-1 text-base font-semibold text-stone-900">
           {trimmed.replace(/^##\s+/, '')}
         </h2>
       );
@@ -44,7 +44,7 @@ function renderManualMarkdown(markdown: string) {
 
     if (trimmed.startsWith('### ')) {
       return (
-        <h3 key={index} className="mt-4 mb-1 text-sm font-bold text-slate-800">
+        <h3 key={index} className="mt-4 mb-1 text-sm font-bold text-stone-800">
           {trimmed.replace(/^###\s+/, '')}
         </h3>
       );
@@ -52,8 +52,8 @@ function renderManualMarkdown(markdown: string) {
 
     if (trimmed.startsWith('- ')) {
       return (
-        <div key={index} className="ml-3 flex gap-2 text-sm leading-relaxed text-slate-700">
-          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+        <div key={index} className="ml-3 flex gap-2 text-sm leading-relaxed text-stone-700">
+          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-accent-600" />
           <span>{trimmed.replace(/^-\s+/, '')}</span>
         </div>
       );
@@ -61,7 +61,7 @@ function renderManualMarkdown(markdown: string) {
 
     if (/^\d+\.\s/.test(trimmed)) {
       return (
-        <p key={index} className="pl-2 text-sm leading-relaxed text-slate-700">
+        <p key={index} className="pl-2 text-sm leading-relaxed text-stone-700">
           {trimmed}
         </p>
       );
@@ -72,7 +72,7 @@ function renderManualMarkdown(markdown: string) {
     }
 
     return (
-      <p key={index} className="text-sm leading-relaxed text-slate-700">
+      <p key={index} className="text-sm leading-relaxed text-stone-700">
         {trimmed}
       </p>
     );
@@ -82,7 +82,6 @@ function renderManualMarkdown(markdown: string) {
 export const Header: React.FC<HeaderProps> = ({
   onLoadSample,
   onReset,
-  onExportPdf,
   onExportWeasyPdf,
   onOpenGrayPdfConverter,
   onSaveNotice,
@@ -90,213 +89,126 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenGeneratedLog,
   onExportNoticeJson,
   onImportNoticeJson,
-  isExporting,
   isWeasyExporting,
   isOverflowing,
 }) => {
   const [showManual, setShowManual] = useState(false);
+  const [showMore, setShowMore] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMore) return;
+    const close = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent ? event.key === 'Escape' : !moreRef.current?.contains(event.target as Node)) {
+        setShowMore(false);
+      }
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', close);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', close);
+    };
+  }, [showMore]);
+
+  const menuItem = 'flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-stone-700 hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50';
+  const runMenuAction = (action: () => void) => () => {
+    setShowMore(false);
+    action();
+  };
 
   return (
-    <header className="bg-white text-slate-900 border-b border-slate-200 sticky top-0 z-30 shadow-sm shrink-0">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        {/* Logo & App Name */}
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center text-emerald-300 shadow-sm">
-            <Printer className="w-5 h-5" />
+    <header className="sticky top-0 z-30 shrink-0 border-b border-stone-200 bg-white">
+      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-stone-900 text-white">
+            <Printer className="h-4 w-4" />
           </div>
-          <div>
-            <h1 className="text-base font-bold leading-tight tracking-wide flex items-center gap-2">
-              Avisos Impresos PDF
-              <span
-                className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
-                  isOverflowing
-                    ? 'bg-rose-50 text-rose-700 border-rose-200'
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                }`}
-              >
+          <div className="min-w-0 max-sm:hidden">
+            <h1 className="flex items-center gap-2 whitespace-nowrap text-sm font-semibold text-stone-900">
+              Avisos legales
+              <span className={`${isOverflowing ? ui.chip.error : ui.chip.ok} max-sm:hidden`}>
                 {isOverflowing ? 'Revisar desborde' : 'Listo para rotativa'}
               </span>
             </h1>
-            <p className="text-xs text-slate-500">
-              Maquetador de Edictos y Avisos Legales en Centímetros (3 mm de Margen)
-            </p>
+            <p className="hidden truncate text-xs text-stone-500 sm:block">Edictos y avisos en centímetros reales</p>
           </div>
         </div>
 
-        {/* Header Actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          <button
-            onClick={() => setShowManual(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 transition-colors"
-            title="Abrir manual de usuario"
-          >
-            <BookOpen className="w-3.5 h-3.5 text-blue-600" />
-            <span>Manual</span>
-          </button>
-
-          <button
-            onClick={onLoadSample}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 transition-colors"
-            title="Cargar el texto de ejemplo de la imagen adjunta"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-            <span className="hidden sm:inline">Ejemplo</span>
-          </button>
-
-          <button
-            onClick={onSaveNotice}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 transition-colors"
-            title="Guardar el anuncio actual para todos"
-          >
-            <Save className="w-3.5 h-3.5 text-emerald-700" />
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <button type="button" onClick={onSaveNotice} className={ui.btn.primary} title="Guardar el anuncio actual para todos">
+            <Save className="h-4 w-4" />
             <span className="hidden sm:inline">Guardar</span>
           </button>
-
-          <button
-            onClick={onOpenSavedNotices}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
-            title="Ver anuncios guardados"
-          >
-            <FolderOpen className="w-3.5 h-3.5 text-slate-500" />
+          <button type="button" onClick={onOpenSavedNotices} className={ui.btn.secondary} title="Ver anuncios guardados">
+            <FolderOpen className="h-4 w-4 text-stone-500" />
             <span className="hidden sm:inline">Guardados</span>
           </button>
-
-          <button
-            onClick={onOpenGeneratedLog}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
-            title="Ver historial de PDFs generados"
-          >
-            <History className="w-3.5 h-3.5 text-slate-500" />
-            <span className="hidden sm:inline">Historial</span>
+          <button type="button" onClick={onOpenGeneratedLog} className={ui.btn.secondary} title="Ver historial de PDFs generados">
+            <History className="h-4 w-4 text-stone-500" />
+            <span className="hidden md:inline">Historial</span>
+          </button>
+          <button type="button" onClick={() => setShowManual(true)} className={ui.btn.ghost} title="Abrir manual de usuario">
+            <BookOpen className="h-4 w-4" />
+            <span className="hidden md:inline">Manual</span>
           </button>
 
-          <button
-            onClick={onExportNoticeJson}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
-            title="Exportar el anuncio actual como JSON"
-          >
-            <FileDown className="w-3.5 h-3.5 text-slate-500" />
-          </button>
-
-          <button
-            onClick={onImportNoticeJson}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
-            title="Importar anuncio desde JSON"
-          >
-            <FileUp className="w-3.5 h-3.5 text-slate-500" />
-          </button>
-
-          <button
-            onClick={onReset}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors"
-            title="Reiniciar a valores por defecto"
-          >
-            <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
-            <span className="hidden sm:inline">Limpiar</span>
-          </button>
-
-          <button
-            onClick={onOpenGrayPdfConverter}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 transition-colors"
-            title="Cargar un PDF externo y convertirlo a grises con Ghostscript"
-          >
-            <Upload className="w-3.5 h-3.5 text-emerald-700" />
-            <span className="hidden sm:inline">Convertir PDF</span>
-          </button>
-
-          <button
-            onClick={onExportWeasyPdf}
-            disabled={isWeasyExporting || isOverflowing}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-            title={
-              isOverflowing
-                ? 'No se puede generar PDF WeasyPrint si el texto está desbordado.'
-                : 'Generar PDF paralelo con WeasyPrint y postproceso Ghostscript a canal K'
-            }
-          >
-            <FileDown className="w-3.5 h-3.5 text-indigo-700" />
-            <span className="hidden sm:inline">{isWeasyExporting ? 'Weasy...' : 'PDF Weasy'}</span>
-          </button>
-
-          {/* Export Dropdown / Buttons */}
-          <div
-            className={`flex items-center gap-1 font-medium text-xs rounded-lg p-0.5 shadow-sm transition-colors ${
-              isOverflowing
-                ? 'bg-rose-100 border border-rose-300 text-rose-800'
-                : 'bg-slate-950 hover:bg-slate-800 text-white border border-slate-900'
-            }`}
-          >
+          <div className="relative" ref={moreRef}>
             <button
-              onClick={onExportPdf}
-              disabled={isExporting || isOverflowing}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-white/10 disabled:opacity-60 transition-colors cursor-pointer disabled:cursor-not-allowed"
-              title={
-                isOverflowing
-                  ? '⚠️ No se puede generar PDF si el texto está desbordado. Usa Auto-Encajar o reduce la fuente.'
-                  : 'Descargar PDF único con el tamaño exacto en cm (6.3x3, 6.3x4, etc.)'
-              }
+              type="button"
+              onClick={() => setShowMore((open) => !open)}
+              aria-haspopup="menu"
+              aria-expanded={showMore}
+              className={ui.btn.ghost}
+              title="Más acciones"
             >
-              {isOverflowing ? (
-                <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              ) : (
-                <Download className="w-3.5 h-3.5" />
-              )}
-              <span>
-                {isExporting
-                  ? 'Generando...'
-                  : isOverflowing
-                  ? 'PDF Deshabilitado (Desborde)'
-                  : 'Descargar PDF (Cm Real)'}
-              </span>
+              <MoreHorizontal className="h-4 w-4" />
+              <span className="hidden sm:inline">Más</span>
             </button>
+            {showMore && (
+              <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-64 overflow-hidden rounded-lg border border-stone-200 bg-white py-1 shadow-lg">
+                <button role="menuitem" className={menuItem} onClick={runMenuAction(onLoadSample)}>
+                  <Sparkles className="h-4 w-4 text-stone-500" /> Cargar ejemplo
+                </button>
+                <button role="menuitem" className={menuItem} onClick={runMenuAction(onReset)}>
+                  <RotateCcw className="h-4 w-4 text-stone-500" /> Limpiar formulario
+                </button>
+                <div className="my-1 border-t border-stone-100" />
+                <button role="menuitem" className={menuItem} onClick={runMenuAction(onExportNoticeJson)}>
+                  <FileDown className="h-4 w-4 text-stone-500" /> Exportar anuncio (JSON)
+                </button>
+                <button role="menuitem" className={menuItem} onClick={runMenuAction(onImportNoticeJson)}>
+                  <FileUp className="h-4 w-4 text-stone-500" /> Importar anuncio (JSON)
+                </button>
+                <div className="my-1 border-t border-stone-100" />
+                <button role="menuitem" className={menuItem} onClick={runMenuAction(onOpenGrayPdfConverter)}>
+                  <Upload className="h-4 w-4 text-stone-500" /> Convertir PDF externo a grises
+                </button>
+                <button
+                  role="menuitem"
+                  className={menuItem}
+                  disabled={isWeasyExporting || isOverflowing}
+                  onClick={runMenuAction(onExportWeasyPdf)}
+                  title={isOverflowing ? 'No disponible con texto desbordado.' : 'Motor alternativo WeasyPrint + Ghostscript'}
+                >
+                  <FlaskConical className="h-4 w-4 text-stone-500" /> {isWeasyExporting ? 'Generando PDF WeasyPrint...' : 'PDF experimental (WeasyPrint)'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Overflow Banner Warning at top if active */}
-      {isOverflowing && (
-        <div className="bg-rose-50 text-rose-800 px-4 py-2 text-xs font-semibold text-center flex items-center justify-center gap-2 border-t border-rose-200">
-          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-          <span>El texto se desborda del área delimitada. El PDF queda bloqueado hasta usar Auto-Encajar o reducir la fuente.</span>
-        </div>
-      )}
-
       {showManual && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-900 px-5 py-4 text-white">
-              <div className="flex items-center gap-2">
-                <BookOpen className="h-5 w-5 text-emerald-300" />
-                <div>
-                  <h2 className="text-sm font-extrabold uppercase tracking-wide">Manual de Usuario</h2>
-                  <p className="text-xs text-slate-300">Avisos impresos PDF para prensa y rotativa</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowManual(false)}
-                className="rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
-                title="Cerrar manual"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto px-6 py-5">
-              <div className="space-y-1">
-                {renderManualMarkdown(manualText)}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end border-t border-slate-200 bg-slate-50 px-5 py-3">
-              <button
-                onClick={() => setShowManual(false)}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-slate-800"
-              >
-                Cerrar
-              </button>
-            </div>
-          </div>
-        </div>
+        <ModalShell
+          title="Manual de usuario"
+          subtitle="Avisos impresos PDF para prensa y rotativa"
+          icon={<BookOpen className="h-5 w-5" />}
+          onClose={() => setShowManual(false)}
+          footer={<button type="button" onClick={() => setShowManual(false)} className={ui.btn.secondary}>Cerrar</button>}
+        >
+          <div className="space-y-1 px-6 py-5">{renderManualMarkdown(manualText)}</div>
+        </ModalShell>
       )}
     </header>
   );

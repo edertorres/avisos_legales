@@ -14,13 +14,20 @@ Esta herramienta permite crear avisos legales y edictos para prensa con medidas 
 6. Revisa que no exista alerta de desborde.
 7. Descarga el PDF en el tamano exacto seleccionado.
 
+## Distribucion de la pantalla
+
+- **Panel izquierdo**: tarjetas plegables con el contenido del aviso (**Tamano y margen**, **Logo o escudo**, **Textos**) y **Ajustes finos** (tamano de tabla, grosor del borde y espaciado entre letras; valores negativos compactan el texto).
+- **Vista previa**: arriba estan **Deshacer/Rehacer**, la guia de margen y el zoom. Debajo, la barra de tipografia es el unico lugar para fuente, tamano del cuerpo, interlineado y alineacion general. El pie muestra tamano, palabras y estado, y tiene **Auto-Encajar** y **Descargar PDF**.
+- **Deshacer y rehacer**: `Ctrl+Z` deshace y `Ctrl+Mayus+Z` (o `Ctrl+Y`) rehace cualquier cambio del aviso, tambien **Limpiar formulario** o cargar un anuncio. Lo que se escribe seguido cuenta como un solo paso. Tambien hay botones junto al titulo de la vista previa.
+- **Campos numericos**: ademas de los botones +/-, las flechas del teclado suben o bajan un paso (con `Mayus`, diez pasos). Se admite coma decimal.
+- **Editar desde el lienzo**: haz clic en un titulo, en el texto o en el logo de la vista previa y el panel salta al campo correspondiente (si el panel estaba oculto, se abre).
+
 ## Barra Superior
 
-- **Cargar Ejemplo Imagen**: carga un aviso de muestra para partir de una referencia.
-- **Limpiar**: reinicia el formulario a los valores por defecto.
-- **Descargar PDF (Cm Real)**: exporta un PDF con el tamano exacto del aviso.
+- **Manual**, **Guardar**, **Guardados** e **Historial**.
+- **Mas**: cargar ejemplo, limpiar formulario, exportar/importar anuncio en JSON, convertir un PDF externo a grises y el PDF experimental con WeasyPrint.
 
-Si hay desborde de texto, los botones de PDF se deshabilitan hasta corregirlo.
+La descarga del PDF esta en el pie de la vista previa. Si hay desborde de texto, se deshabilita hasta corregirlo.
 
 ## Dimensiones y Margen
 
@@ -45,14 +52,51 @@ Controles disponibles:
 - **Negrita**: aplica negrita al texto seleccionado.
 - **Subrayado**: subraya el texto seleccionado. Puede combinarse con negrita y alineación en cualquier orden; se conserva en la vista previa y el PDF.
 - **Resaltar Nombres**: detecta nombres, empresas, NIT, cedulas y documentos para resaltarlos automaticamente.
-- **Limpiar**: elimina los resaltados automaticos.
 - **.TXT**: permite importar un archivo de texto plano.
-- **Tabla**: inserta un bloque `##table ... ##/table` en la posicion del cursor.
+- **Tabla**: abre el editor de tablas (ver **Tablas**). Si el cursor esta dentro de una tabla, la edita.
 - **Imagen**: sube una imagen local e inserta su marcador en la posicion del cursor.
+
+## Tablas
+
+Hay tres formas de crear o editar una tabla:
+
+1. **Pegar desde Excel, Google Sheets o Word** directamente en el cuerpo del texto: la tabla se detecta y se convierte sola. Se lee la version HTML que esos programas copian, por lo que:
+   - las **celdas combinadas** se respetan (el texto queda en la primera celda y el resto vacias);
+   - una **celda con varias lineas** (Alt+Intro en Excel, varios parrafos en Word) se une en una sola linea, que luego parte sola si no cabe;
+   - si copias en Word **texto y tabla juntos**, se pegan en el mismo orden: el texto como parrafos y la tabla como tabla;
+   - tambien sirve **una sola fila** de Excel;
+   - las filas ocultas de Excel no se pegan.
+
+   El formato (negritas, colores, numeros) no se copia: los valores llegan tal como se ven en la hoja. Ajusta encabezado, ancho y alineacion en el editor.
+2. Pulsar **Tabla** en la barra del texto: abre el editor en la posicion del cursor (o edita la tabla donde esta el cursor).
+3. Hacer **clic sobre una tabla en la vista previa**: abre el editor con esa tabla.
+
+En el editor:
+
+- Escribe en las celdas; **Intro** baja a la fila siguiente (y la crea si hace falta) y **Tab** pasa a la celda siguiente.
+- **Pegar en una celda** un bloque copiado de una hoja de calculo lo reparte desde esa celda y amplia la tabla.
+- **+ Fila**, **+ Columna**, y los botones de cada fila/columna para eliminarlas (hasta 100 filas y 12 columnas).
+- **Primera fila es encabezado**: si se desmarca, ninguna fila va en negrita.
+- **Ancho**: *Ajustado al contenido* (centrada) o *Todo el ancho* del aviso.
+- **Alineacion por columna** (izquierda, centro, derecha), por ejemplo los importes a la derecha.
+- **Eliminar tabla** quita la tabla del aviso. Todo se puede deshacer con `Ctrl+Z`.
+
+Las lineas de la tabla miden 0,25 pt y el texto queda centrado verticalmente en cada celda. Las celdas parten linea entre palabras cuando la tabla no cabe; las palabras no se cortan. Si una tabla es mas ancha que el aviso, aparece el aviso de desborde ("Una tabla es X mm mas ancha que el aviso") y el PDF se bloquea: usa **Auto-Encajar** (tambien reduce el tamano de tabla en proporcion), baja **Tamano de tabla** en Ajustes finos o acorta las palabras. Las lineas se imprimen en negro K.
+
+En el texto, la tabla se guarda como un bloque legible que tambien puede editarse a mano:
+
+```
+##table ancho=completo alinear=izq,centro,der
+| Nombre | Cedula | Valor |
+| Ana Perez | 1.234.567 | $ 50.000 |
+##/table
+```
+
+Opciones de la primera linea: `encabezado=no`, `ancho=completo`, `alinear=izq,centro,der`. Para escribir una barra `|` dentro de una celda usa `\|`. Las tablas antiguas (separadas por `|`, tabuladores o comas) siguen funcionando.
 
 ## Resaltado de Nombres y Documentos
 
-El boton **Resaltar Nombres** actualiza el conteo de elementos resaltados y aplica negrita en la compilacion Typst.
+El boton **Resaltar Nombres** detecta los elementos y los pone en negrita en todo el aviso. Debajo del texto aparece la lista **Negritas automaticas**: pulsa la **x** de un elemento para quitarle la negrita, o **Quitar todas** para eliminarlas.
 
 Ejemplos de elementos que puede detectar:
 
@@ -66,7 +110,7 @@ Si necesitas resaltar algo especifico, selecciona el texto y usa **Negrita**.
 
 ## Logo o Imagen
 
-En la seccion **Logo Escudo** puedes:
+En la seccion **Logo o escudo** puedes:
 
 - Subir una imagen.
 - Quitar la imagen activa.
@@ -96,16 +140,16 @@ Cada imagen insertada aparece en la lista **Imagenes del aviso**. Desde ahi pued
 
 Las imagenes antiguas guardadas sin marcador seguiran apareciendo al final del contenido.
 
-## Atributos Rapidos
+## Barra de tipografia
 
-Sobre el lienzo hay una barra de atributos rapidos:
+Sobre el lienzo hay una barra de tipografia:
 
 - **Fuente**: cambia la familia tipografica.
 - **Letra**: aumenta o reduce el tamano del cuerpo.
 - **Inter**: aumenta o reduce el interlineado.
-- **Alineacion**: justificado, izquierda o centro.
-- **Auto-Encajar**: ajusta automaticamente la fuente para evitar desborde.
-- **Guia 3 mm**: muestra u oculta la guia visual de margen.
+- **Alineacion**: justificado, izquierda, centro o derecha.
+
+**Auto-Encajar** (en el pie y en el aviso de desborde) reduce primero el interlineado y despues la letra hasta que el texto cabe; si sobra espacio, amplia la letra. Mide con el mismo render del PDF, incluidas negritas, logo, tablas e imagenes. Si el texto no cabe ni con la letra minima (5,5 pt), sugiere un tamano de aviso mayor.
 
 Fuentes disponibles:
 
@@ -127,12 +171,14 @@ El control **Inter** es util cuando el texto casi cabe: reducirlo ligeramente pu
 
 La vista previa usa el mismo render HTML/CSS que genera el PDF final. Por eso debe coincidir con la salida exportada.
 
-Debajo del aviso se muestran indicadores visibles:
+- **Zoom**: por defecto esta en **Ajustar**, que encaja el aviso en el espacio disponible y se recalcula al cambiar el tamano de la ventana. Los botones de lupa pasan a zoom manual; **100 %** es el tamano de lectura habitual.
+- **Guia de margen**: muestra u oculta la guia visual del margen configurado.
 
-- Motor de renderizado.
+En el pie de la vista previa se muestran:
+
 - Tamano exacto del aviso.
 - Conteo de palabras.
-- Interlineado actual.
+- Estado: **Cabe en el espacio** o cuanto sobra (por ejemplo, `Sobra ~12 % (≈3 lineas)`).
 
 ## Desborde de Texto
 
@@ -140,7 +186,7 @@ La aplicacion detecta cuando el contenido excede el area del aviso.
 
 Cuando hay desborde:
 
-- Aparece una alerta roja.
+- Aparece una alerta roja que indica cuanto sobra (porcentaje del alto y lineas aproximadas).
 - El borde de la vista previa se resalta.
 - La exportacion PDF se deshabilita.
 
@@ -187,11 +233,11 @@ Quita el logo y vuelve a subirlo. Se recomiendan formatos `PNG`, `JPG`, `SVG`, `
 
 ### Las negritas no se ven
 
-Usa **Resaltar Nombres** o selecciona el texto y presiona **Negrita**. Luego espera a que termine la compilacion.
+Usa **Resaltar Nombres** o selecciona el texto y presiona **Negrita**. La vista previa se actualiza al instante.
 
 ### La alineacion se ve como texto
 
-Si aparecen etiquetas como `[center]`, vuelve a seleccionar el texto y aplica la alineacion desde los botones del panel. La compilacion Typst debe convertir esas etiquetas en alineacion real.
+Si aparecen etiquetas como `[center]`, vuelve a seleccionar el texto y aplica la alineacion desde los botones del panel. Revisa que cada etiqueta de apertura tenga su cierre, por ejemplo `[center]...[/center]`.
 
 ### El texto se parte raro alrededor del logo
 

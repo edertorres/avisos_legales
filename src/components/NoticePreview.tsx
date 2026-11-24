@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { NoticeConfig, OverflowStatus, SizeOption, FontFamily, TextAlign } from '../types';
 import { FONT_OPTIONS } from '../data/fonts';
 import { NoticeCanvas } from './NoticeCanvas';
+import { CompactStepper } from './CompactStepper';
+import * as ui from './ui';
 import {
   AlertTriangle,
   Sparkles,
@@ -9,18 +11,28 @@ import {
   ZoomOut,
   Ruler,
   Download,
-  Info,
-  Type,
   AlignJustify,
   AlignLeft,
   AlignCenter,
-  Minus,
-  Plus,
+  AlignRight,
   Rows3,
   FileText,
+  Undo2,
+  Redo2,
+  Maximize,
 } from 'lucide-react';
 
 const PX_PER_CM = 37.795;
+const PX_PER_PT = 96 / 72;
+/** Zoom 2.2 is shown as "100 %" (comfortable reading size), as before. */
+const REFERENCE_ZOOM = 2.2;
+const MIN_ZOOM = 0.8;
+const MAX_ZOOM = 6;
+/** Room around the notice for the cm rulers and breathing space. */
+const FIT_PADDING_X = 96;
+const FIT_PADDING_Y = 104;
+
+export type EditTarget = 'headerTitle' | 'subheaderTitle' | 'bodyText' | 'logo' | 'table';
 
 interface NoticePreviewProps {
   config: NoticeConfig;
@@ -31,7 +43,27 @@ interface NoticePreviewProps {
   availableSizes: SizeOption[];
   onExportPdf: () => void;
   isExporting: boolean;
+  /** `index` is the table's position in the body when target is 'table'. */
+  onEditTarget?: (target: EditTarget, index?: number) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
 }
+
+/** Approximate overflow as % of the printable height and as body-text lines. */
+export function describeOverflow(status: OverflowStatus, config: NoticeConfig): string {
+  if (status.overflowHeightPx <= 1 && (status.overflowWidthPx ?? 0) > 1) {
+    const mm = Math.max(0.1, (status.overflowWidthPx ?? 0) / (PX_PER_CM / 10));
+    return `Una tabla es ${mm.toFixed(1)} mm más ancha que el aviso`;
+  }
+  const lineHeightPx = config.bodyFontSizePt * PX_PER_PT * config.lineHeight;
+  const lines = Math.max(1, Math.ceil(status.overflowHeightPx / lineHeightPx));
+  const percent = Math.max(1, Math.round(status.overflowPercentage));
+  return `Sobra ~${percent} % (≈${lines} ${lines === 1 ? 'línea' : 'líneas'})`;
+}
+
+const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number(z.toFixed(2))));
 
 export const NoticePreview: React.FC<NoticePreviewProps> = ({
   config,
@@ -42,8 +74,16 @@ export const NoticePreview: React.FC<NoticePreviewProps> = ({
   availableSizes,
   onExportPdf,
   isExporting,
+  onEditTarget,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
 }) => {
-  const [zoomScale, setZoomScale] = useState<number>(2.2);
+  const [zoomMode, setZoomMode] = useState<'fit' | 'manual'>('fit');
+  const [manualZoom, setManualZoom] = useState<number>(REFERENCE_ZOOM);
+  const [fitZoom, setFitZoom] = useState<number>(REFERENCE_ZOOM);
+  const workAreaRef = useRef<HTMLDivElement>(null);
   const [overflowData, setOverflowData] = useState<OverflowStatus>({
     isOverflowing: false,
     overflowHeightPx: 0,
@@ -51,8 +91,34 @@ export const NoticePreview: React.FC<NoticePreviewProps> = ({
     recommendedHeightCm: config.size.heightCm,
   });
 
-  const pixelWidth = config.size.widthCm * PX_PER_CM * zoomScale;
-  const pixelHeight = config.size.heightCm * PX_PER_CM * zoomScale;
+  const baseWidth = config.size.widthCm * PX_PER_CM;
+  const baseHeight = config.size.heightCm * PX_PER_CM;
+
+  // Recompute the "fit" zoom whenever the work area or the notice size changes.
+  useEffect(() => {
+    const area = workAreaRef.current;
+    if (!area) return;
+    const compute = () => {
+      const scale = Math.min(
+        (area.clientWidth - FIT_PADDING_X) / baseWidth,
+        (area.clientHeight - FIT_PADDING_Y) / baseHeight,
+      );
+      if (Number.isFinite(scale) && scale > 0) setFitZoom(clampZoom(scale));
+    };
+    compute();
+    const observer = new ResizeObserver(compute);
+    observer.observe(area);
+    return () => observer.disconnect();
+  }, [baseWidth, baseHeight]);
+
+  const zoomScale = zoomMode === 'fit' ? fitZoom : manualZoom;
+  const zoomBy = (delta: number) => {
+    setManualZoom(clampZoom(zoomScale + delta));
+    setZoomMode('manual');
+  };
+
+  const pixelWidth = baseWidth * zoomScale;
+  const pixelHeight = baseHeight * zoomScale;
   const wordCount = (config.bodyText || '')
     .replace(/\[[^\]]+\]/g, ' ')
     .replace(/\*\*/g, '')
@@ -60,86 +126,104 @@ export const NoticePreview: React.FC<NoticePreviewProps> = ({
     .split(/\s+/)
     .filter(Boolean).length;
 
+  const handleCanvasClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!onEditTarget) return;
+    const target = (event.target as HTMLElement).closest('[data-edit-target]');
+    const editTarget = target?.getAttribute('data-edit-target') as EditTarget | null;
+    if (!editTarget) return;
+    const tableIndex = target?.getAttribute('data-table-index');
+    onEditTarget(editTarget, tableIndex === null || tableIndex === undefined ? undefined : Number(tableIndex));
+  };
+
   const handleOverflow = (status: OverflowStatus) => {
     setOverflowData(status);
     onOverflowStatusChange(status);
   };
 
-  const commitBodyFontSize = (rawValue: string) => {
-    const parsed = parseFloat(rawValue.replace(',', '.'));
-    if (Number.isNaN(parsed)) return;
-    const clamped = Math.min(16, Math.max(4, parsed));
-    onConfigChange({ bodyFontSizePt: Number(clamped.toFixed(2)) });
-  };
-
   const recommendedNextSize = availableSizes.find(
     (s) => s.widthCm === config.size.widthCm && s.heightCm > config.size.heightCm,
   );
+  const overflowText = overflowData.isOverflowing ? describeOverflow(overflowData, config) : '';
 
   return (
-    <div className="bg-slate-100 rounded-xl border border-slate-200 flex flex-col h-full overflow-hidden shadow-inner">
-      {/* Top Controls Bar */}
-      <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2 text-sm font-black text-slate-900 uppercase tracking-wide">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-950 text-emerald-300">
-            <Ruler className="w-4 h-4" />
-          </span>
-          <span>Vista previa</span>
+    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-stone-200 bg-stone-100">
+      {/* Title + history + zoom */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 bg-white px-4 py-2.5">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-stone-800">Vista previa</h2>
+          {(onUndo || onRedo) && (
+            <div className="ml-2 flex items-center gap-1">
+              <button type="button" className={ui.btn.icon} onClick={onUndo} disabled={!canUndo} title="Deshacer (Ctrl+Z)" aria-label="Deshacer">
+                <Undo2 className="h-4 w-4" />
+              </button>
+              <button type="button" className={ui.btn.icon} onClick={onRedo} disabled={!canRedo} title="Rehacer (Ctrl+Mayús+Z)" aria-label="Rehacer">
+                <Redo2 className="h-4 w-4" />
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Zoom controls */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
-            <button
-              onClick={() => setZoomScale((z) => Math.max(0.8, Number((z - 0.3).toFixed(1))))}
-              className="p-1 hover:bg-white text-slate-700 rounded transition-colors"
-              title="Alejar vista"
-            >
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-xs font-mono font-extrabold text-slate-800 px-1 w-12 text-center">
-              {Math.round((zoomScale / 2.2) * 100)}%
-            </span>
-            <button
-              onClick={() => setZoomScale((z) => Math.min(4, Number((z + 0.3).toFixed(1))))}
-              className="p-1 hover:bg-white text-slate-700 rounded transition-colors"
-              title="Acercar vista"
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setZoomScale(2.2)}
-              className="px-2 py-1 text-xs bg-white text-slate-700 hover:bg-slate-200 rounded font-bold border border-slate-300 ml-1"
-            >
-              Zoom 100%
-            </button>
-          </div>
+        <div className="flex flex-wrap items-center gap-3">
+        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-stone-600 hover:text-stone-900">
+          <input
+            type="checkbox"
+            checked={config.showMarginGuides}
+            onChange={(e) => onConfigChange({ showMarginGuides: e.target.checked })}
+            className="h-3.5 w-3.5 rounded accent-accent-700"
+          />
+          Guía {config.marginMm} mm
+        </label>
+        <div className={ui.segmented.group} role="group" aria-label="Zoom">
+          <button type="button" className={ui.segmented.option(false)} onClick={() => zoomBy(-0.3)} title="Alejar" aria-label="Alejar">
+            <ZoomOut className="h-3.5 w-3.5" />
+          </button>
+          <span className="w-12 text-center text-xs font-medium tabular-nums text-stone-700" aria-live="polite">
+            {Math.round((zoomScale / REFERENCE_ZOOM) * 100)}%
+          </span>
+          <button type="button" className={ui.segmented.option(false)} onClick={() => zoomBy(0.3)} title="Acercar" aria-label="Acercar">
+            <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            className={ui.segmented.option(zoomMode === 'fit')}
+            aria-pressed={zoomMode === 'fit'}
+            onClick={() => setZoomMode('fit')}
+            title="Ajustar el aviso al espacio disponible"
+          >
+            <Maximize className="h-3.5 w-3.5" /> Ajustar
+          </button>
+          <button
+            type="button"
+            className={ui.segmented.option(zoomMode === 'manual' && manualZoom === REFERENCE_ZOOM)}
+            onClick={() => {
+              setManualZoom(REFERENCE_ZOOM);
+              setZoomMode('manual');
+            }}
+          >
+            100%
+          </button>
+        </div>
         </div>
       </div>
 
-      {/* Overflow Banner */}
+      {/* Overflow banner */}
       {overflowData.isOverflowing && (
-        <div className="bg-rose-50 border-b border-rose-200 p-3 flex flex-wrap items-center justify-between gap-2 text-rose-900 animate-fadeIn">
-          <div className="flex items-center gap-2 text-sm font-black">
-            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-200 bg-rose-50 px-4 py-2.5 text-rose-900" role="alert">
+          <div className="flex items-center gap-2 text-sm">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
             <span>
-              Desborde de texto. El contenido excede el espacio de {config.size.heightCm} cm.
+              <strong className="font-semibold">El texto no cabe.</strong>{' '}
+              {overflowData.overflowHeightPx > 1 ? `${overflowText} del alto de ${config.size.heightCm} cm.` : `${overflowText}: reduce el tamaño de tabla o acorta palabras.`}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={onAutoFitFont}
-              className="flex items-center gap-1 px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded shadow-sm transition-colors"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Auto-Ajustar Fuente
+            <button type="button" onClick={onAutoFitFont} className={ui.btn.primary}>
+              <Sparkles className="h-3.5 w-3.5" />
+              Auto-Encajar
             </button>
             {recommendedNextSize && (
-              <button
-                onClick={() => onSelectSize(recommendedNextSize)}
-                className="flex items-center gap-1 px-3 py-1.5 bg-white hover:bg-rose-100 text-rose-900 font-bold text-xs rounded border border-rose-300 transition-colors"
-              >
-                <Ruler className="w-3.5 h-3.5 text-rose-600" />
+              <button type="button" onClick={() => onSelectSize(recommendedNextSize)} className={ui.btn.secondary}>
+                <Ruler className="h-3.5 w-3.5" />
                 Usar {recommendedNextSize.widthCm}×{recommendedNextSize.heightCm} cm
               </button>
             )}
@@ -147,150 +231,93 @@ export const NoticePreview: React.FC<NoticePreviewProps> = ({
         </div>
       )}
 
-      {/* Quick Attributes Toolbar */}
-      <div className="bg-white text-slate-900 px-4 py-3 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2 text-xs shadow-sm">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-2.5 py-1.5">
-            <Type className="w-3.5 h-3.5 text-emerald-600" /> Atributos Rápidos
-          </span>
+      {/* Typography toolbar: the single place for font, size, leading and alignment */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-stone-200 bg-white px-4 py-2.5">
+        <select
+          value={config.fontFamily}
+          onChange={(e) => onConfigChange({ fontFamily: e.target.value as FontFamily })}
+          className={`${ui.field} !w-auto max-w-[12.5rem] !py-1.5`}
+          aria-label="Fuente"
+          style={{ fontFamily: config.fontFamily }}
+        >
+          {FONT_OPTIONS.map((font) => (
+            <option key={font.value} value={font.value}>
+              {font.label}
+            </option>
+          ))}
+        </select>
 
-          <select
-            value={config.fontFamily}
-            onChange={(e) => onConfigChange({ fontFamily: e.target.value as FontFamily })}
-            className="bg-white text-slate-900 border border-slate-300 rounded-md px-2.5 py-2 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-slate-900"
-          >
-            {FONT_OPTIONS.map((font) => (
-              <option key={font.value} value={font.value} className="text-slate-900 bg-white font-sans">
-                {font.label}
-              </option>
-            ))}
-          </select>
-
-          {/* Font size +/- */}
-          <div className="flex items-center gap-1 bg-slate-100 px-2 py-1.5 rounded-md border border-slate-200">
-            <span className="text-xs text-slate-600 font-extrabold uppercase">Letra</span>
-            <button
-              onClick={() => onConfigChange({ bodyFontSizePt: Math.max(4, Number((config.bodyFontSizePt - 0.25).toFixed(2))) })}
-              className="p-1 hover:bg-white rounded text-slate-700 border border-transparent hover:border-slate-200"
-              title="Reducir letra"
-            >
-              <Minus className="w-3 h-3" />
-            </button>
-            <div className="relative w-20">
-              <input
-                type="text"
-                inputMode="decimal"
-                defaultValue={config.bodyFontSizePt.toString()}
-                key={`quick-body-font-${config.bodyFontSizePt}`}
-                onBlur={(e) => commitBodyFontSize(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                className="w-full rounded border border-slate-300 bg-white py-1 pr-6 pl-2 text-center font-mono text-sm font-extrabold text-slate-950 focus:outline-none focus:ring-2 focus:ring-slate-900"
-              />
-              <span className="absolute right-1.5 top-1/2 -translate-y-1/2 select-none text-xs font-extrabold text-slate-500 pointer-events-none">pt</span>
-            </div>
-            <button
-              onClick={() => onConfigChange({ bodyFontSizePt: Math.min(16, Number((config.bodyFontSizePt + 0.25).toFixed(2))) })}
-              className="p-1 hover:bg-white rounded text-slate-700 border border-transparent hover:border-slate-200"
-              title="Aumentar letra"
-            >
-              <Plus className="w-3 h-3" />
-            </button>
-          </div>
-
-          {/* Line height +/- */}
-          <div className="flex items-center gap-1 bg-emerald-50 px-2 py-1.5 rounded-md border border-emerald-200 shadow-sm">
-            <Rows3 className="w-3.5 h-3.5 text-emerald-700" />
-            <span className="text-xs text-emerald-800 font-extrabold uppercase">Inter</span>
-            <button
-              onClick={() => onConfigChange({ lineHeight: Math.max(1.1, Number((config.lineHeight - 0.02).toFixed(2))) })}
-              className="p-1 hover:bg-white rounded text-slate-700 border border-transparent hover:border-emerald-200"
-              title="Reducir interlineado"
-            >
-              <Minus className="w-3 h-3" />
-            </button>
-            <span className="font-mono font-extrabold text-emerald-950 bg-white rounded px-1.5 min-w-12 text-center border border-emerald-200 text-sm">
-              {config.lineHeight.toFixed(2)}
-            </span>
-            <button
-              onClick={() => onConfigChange({ lineHeight: Math.min(1.8, Number((config.lineHeight + 0.02).toFixed(2))) })}
-              className="p-1 hover:bg-white rounded text-slate-700 border border-transparent hover:border-emerald-200"
-              title="Aumentar interlineado"
-            >
-              <Plus className="w-3 h-3" />
-            </button>
-          </div>
-
-          {/* Alignment buttons */}
-          <div className="flex items-center gap-0.5 bg-slate-100 p-1.5 rounded-md border border-slate-200">
-            {[
-              { align: 'justify', icon: AlignJustify, label: 'Justificar' },
-              { align: 'left', icon: AlignLeft, label: 'Izquierda' },
-              { align: 'center', icon: AlignCenter, label: 'Centro' },
-            ].map((btn) => {
-              const Icon = btn.icon;
-              const active = config.textAlign === btn.align;
-              return (
-                <button
-                  key={btn.align}
-                  onClick={() => onConfigChange({ textAlign: btn.align as TextAlign })}
-                  className={`p-1.5 rounded transition-colors ${
-                    active ? 'bg-slate-950 text-white font-bold shadow-sm' : 'text-slate-600 hover:bg-white hover:text-slate-950'
-                  }`}
-                  title={btn.label}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onAutoFitFont}
-            className="flex items-center gap-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-md shadow-sm transition-colors"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Auto-Encajar</span>
-          </button>
-          <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-slate-600 hover:text-slate-950 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2">
-            <input
-              type="checkbox"
-              checked={config.showMarginGuides}
-              onChange={(e) => onConfigChange({ showMarginGuides: e.target.checked })}
-              className="rounded accent-emerald-500"
-            />
-            <span>Guía 3mm</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Main Preview Work Area */}
-      <div className="flex-1 overflow-auto overscroll-contain p-4 sm:p-6 pt-8 pb-16 relative bg-slate-100">
-        <div
-          className="absolute inset-0 opacity-10 pointer-events-none"
-          style={{
-            backgroundImage: `radial-gradient(#000 1px, transparent 1px)`,
-            backgroundSize: `16px 16px`,
-          }}
+        <CompactStepper
+          label="Letra"
+          value={config.bodyFontSizePt}
+          onChange={(bodyFontSizePt) => onConfigChange({ bodyFontSizePt })}
+          min={4}
+          max={16}
+          step={0.25}
+          unit="pt"
         />
 
-        <div className="relative z-10 w-max min-w-max transition-all duration-200 mx-auto">
-          {/* Dimension labels */}
-          <div className="absolute -top-6 left-0 right-0 flex justify-between text-xs font-mono text-slate-500 font-bold">
+        <CompactStepper
+          label="Inter"
+          icon={<Rows3 className="h-3.5 w-3.5 text-stone-500" />}
+          value={config.lineHeight}
+          onChange={(lineHeight) => onConfigChange({ lineHeight })}
+          min={1.1}
+          max={1.8}
+          step={0.02}
+        />
+
+        <div className={ui.segmented.group} role="group" aria-label="Alineación del cuerpo">
+          {[
+            { align: 'justify', icon: AlignJustify, label: 'Justificar' },
+            { align: 'left', icon: AlignLeft, label: 'Izquierda' },
+            { align: 'center', icon: AlignCenter, label: 'Centro' },
+            { align: 'right', icon: AlignRight, label: 'Derecha' },
+          ].map((item) => {
+            const Icon = item.icon;
+            const active = config.textAlign === item.align;
+            return (
+              <button
+                key={item.align}
+                type="button"
+                onClick={() => onConfigChange({ textAlign: item.align as TextAlign })}
+                className={ui.segmented.option(active)}
+                aria-pressed={active}
+                title={item.label}
+                aria-label={item.label}
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </button>
+            );
+          })}
+        </div>
+
+      </div>
+
+      {/* Work area */}
+      <div ref={workAreaRef} className="relative min-h-[260px] flex-1 overflow-auto overscroll-contain bg-stone-100 p-4 pb-16 pt-8 sm:p-6 sm:pt-8">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.07]"
+          style={{ backgroundImage: 'radial-gradient(#44403c 1px, transparent 1px)', backgroundSize: '16px 16px' }}
+        />
+
+        <div className="relative z-10 mx-auto w-max min-w-max">
+          <div className="absolute -top-6 left-0 right-0 flex justify-between text-[11px] tabular-nums text-stone-500">
             <span>0 cm</span>
             <span>{config.size.widthCm} cm</span>
           </div>
-          <div className="absolute -left-7 top-0 bottom-0 flex flex-col justify-between text-xs font-mono text-slate-500 font-bold text-right pr-1">
+          <div className="absolute -left-8 bottom-0 top-0 flex flex-col justify-between pr-1 text-right text-[11px] tabular-nums text-stone-500">
             <span>0</span>
-            <span>{config.size.heightCm}cm</span>
+            <span>{config.size.heightCm} cm</span>
           </div>
 
-          {/* Notice Canvas — pure HTML/CSS, no Typst */}
+          {/* Notice canvas — the same HTML/CSS component Puppeteer renders to PDF */}
           <div
-            className={`bg-white text-black relative shadow-xl transition-shadow overflow-hidden box-border border border-slate-300 ${
-              overflowData.isOverflowing ? 'ring-4 ring-rose-500/80' : ''
-            }`}
+            onClick={handleCanvasClick}
+            title={onEditTarget ? 'Haz clic en un título, el texto, una tabla o el logo para editarlo' : undefined}
+            className={`relative box-border overflow-hidden border border-stone-300 bg-white text-black shadow-lg ${
+              onEditTarget ? '[&_[data-edit-target]]:cursor-pointer [&_[data-edit-target]:hover]:outline [&_[data-edit-target]:hover]:outline-1 [&_[data-edit-target]:hover]:outline-accent-500/70' : ''
+            } ${overflowData.isOverflowing ? 'ring-4 ring-rose-500/70' : ''}`}
             style={{ width: `${pixelWidth}px`, height: `${pixelHeight}px` }}
           >
             <NoticeCanvas
@@ -300,60 +327,47 @@ export const NoticePreview: React.FC<NoticePreviewProps> = ({
               showMarginGuides={config.showMarginGuides}
             />
           </div>
-
-          {/* Physical size label */}
-          <div className="mt-3 text-center">
-            <div className="inline-flex flex-wrap items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-mono text-slate-700 shadow-sm">
-              <span className="inline-flex items-center gap-1 rounded-md bg-slate-950 px-3 py-1.5 font-extrabold text-white border border-slate-800">
-                <Ruler className="w-3.5 h-3.5 text-emerald-300" />
-                {config.size.widthCm} × {config.size.heightCm} cm
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-3 py-1.5 font-extrabold text-amber-900 border border-amber-200">
-                <FileText className="w-3.5 h-3.5 text-amber-600" />
-                {wordCount} palabras
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-3 py-1.5 font-extrabold text-emerald-900 border border-emerald-200">
-                <Rows3 className="w-3.5 h-3.5 text-emerald-600" />
-                Inter {config.lineHeight.toFixed(2)}
-              </span>
-            </div>
-          </div>
         </div>
       </div>
 
-      {/* Footer Action Bar */}
-      <div className="bg-white border-t border-slate-200 p-3 flex items-center justify-between gap-3">
-        <div className="text-sm text-slate-600 font-bold flex items-center gap-1.5">
-          <Info className="w-4 h-4 text-slate-500" />
-          <span>{overflowData.isOverflowing ? 'Ajusta el aviso antes de exportar.' : 'Aviso listo para exportar.'}</span>
+      {/* Footer: status + export */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 bg-white px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={ui.chip.neutral}>
+            <Ruler className="h-3.5 w-3.5 text-stone-500" />
+            {config.size.widthCm} × {config.size.heightCm} cm
+          </span>
+          <span className={ui.chip.neutral}>
+            <FileText className="h-3.5 w-3.5 text-stone-500" />
+            {wordCount} palabras
+          </span>
+          <span className={overflowData.isOverflowing ? ui.chip.error : ui.chip.ok}>
+            {overflowData.isOverflowing ? overflowText : 'Cabe en el espacio'}
+          </span>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={onExportPdf}
-            disabled={isExporting || overflowData.isOverflowing}
-            className={`flex items-center gap-1.5 px-4 py-2.5 font-bold text-sm rounded-lg shadow transition-colors ${
-              overflowData.isOverflowing
-                ? 'bg-rose-100 text-rose-800 border border-rose-300 cursor-not-allowed opacity-90'
-                : 'bg-slate-900 hover:bg-slate-800 text-white disabled:opacity-50'
-            }`}
-            title={
-              overflowData.isOverflowing
-                ? '⚠️ No se puede exportar el PDF porque el texto está desbordado.'
-                : `Descargar PDF (${config.size.widthCm}x${config.size.heightCm} cm)`
-            }
-          >
-            {overflowData.isOverflowing ? (
-              <>
-                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                <span>PDF Deshabilitado (Desbordado)</span>
-              </>
-            ) : (
-              <>
-                <Download className="w-4 h-4 text-emerald-400" />
-                <span>Descargar PDF ({config.size.widthCm}x{config.size.heightCm} cm)</span>
-              </>
-            )}
-          </button>
+        <button type="button" onClick={onAutoFitFont} className={ui.btn.secondary} title="Ajustar letra e interlineado para que el texto quepa (o aprovechar el espacio sobrante)">
+          <Sparkles className="h-3.5 w-3.5 text-accent-700" />
+          Auto-Encajar
+        </button>
+        <button
+          type="button"
+          onClick={onExportPdf}
+          disabled={isExporting || overflowData.isOverflowing}
+          className={`${ui.btn.primary} px-4`}
+          title={
+            overflowData.isOverflowing
+              ? 'No se puede exportar: el texto está desbordado.'
+              : `Descargar PDF (${config.size.widthCm}×${config.size.heightCm} cm)`
+          }
+        >
+          {overflowData.isOverflowing ? <AlertTriangle className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+          {isExporting
+            ? 'Generando PDF...'
+            : overflowData.isOverflowing
+            ? 'PDF bloqueado por desborde'
+            : `Descargar PDF (${config.size.widthCm}×${config.size.heightCm} cm)`}
+        </button>
         </div>
       </div>
     </div>

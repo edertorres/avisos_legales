@@ -29,9 +29,7 @@ export const DEFAULT_NOTICE_CONFIG: NoticeConfig = {
   textAlign: 'justify',
   borderWidthPx: 1.0,
   grayscaleLogo: true,
-  contrastMode: 'normal',
   showMarginGuides: true,
-  headerAlign: 'center',
   boldKeywords: [],
   bodyImages: [],
 };
@@ -58,9 +56,7 @@ Así las cosas, quien crea tener igual o mejor derecho que la solicitante, debe 
   textAlign: 'justify',
   borderWidthPx: 1.0,
   grayscaleLogo: true,
-  contrastMode: 'normal',
   showMarginGuides: true,
-  headerAlign: 'center',
   boldKeywords: ['INFORMA QUE:', 'DANIEL ECHEVERRI CASTAÑO', 'EUNICE HOYOS DE ECHEVERRI'],
   bodyImages: [],
 };

@@ -1,3 +1,7 @@
+import { createElement } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot, type Root } from 'react-dom/client';
+import { NoticeCanvas, getTableFontSizePt } from '../components/NoticeCanvas';
 import { NoticeConfig, SizeOption } from '../types';
 
 export interface AutoFitResult {
@@ -5,8 +9,6 @@ export interface AutoFitResult {
   message: string;
   suggestedSize?: SizeOption;
 }
-
-const PX_PER_CM = 37.795;
 
 /**
  * Newspaper-appropriate font size ranges (in points).
@@ -32,125 +34,72 @@ const LINE_HEIGHT_RANGE = {
 } as const;
 
 /**
- * Create a hidden off-screen measurement element that mirrors the notice layout.
+ * Measures fit with the real NoticeCanvas (the same component used by the preview
+ * and by Puppeteer for the PDF), rendered off-screen at scale 1. This keeps bold
+ * text, auto-bold keywords, logos, tables and images in the measurement, so the
+ * auto-fit result matches what the preview and the PDF show.
  */
-function createMeasurementElement(config: NoticeConfig): { el: HTMLDivElement; cleanup: () => void } {
-  const container = document.createElement('div');
-  container.style.cssText = `
-    position: fixed;
-    left: -99999px;
-    top: -99999px;
-    pointer-events: none;
-    z-index: -1;
-  `;
+class CanvasMeasurer {
+  private readonly container: HTMLDivElement;
+  private readonly root: Root;
 
-  const widthPx = config.size.widthCm * PX_PER_CM;
-  const heightPx = config.size.heightCm * PX_PER_CM;
-  const marginPx = (config.marginMm / 10) * PX_PER_CM;
-  const borderWidth = Math.max(0.2, config.borderWidthPx || 0.5);
+  constructor() {
+    this.container = document.createElement('div');
+    this.container.setAttribute('aria-hidden', 'true');
+    this.container.style.cssText = 'position:fixed;left:-99999px;top:0;pointer-events:none;visibility:hidden;';
+    document.body.appendChild(this.container);
+    this.root = createRoot(this.container);
+  }
 
-  container.innerHTML = `
-    <div style="
-      width: ${widthPx}px;
-      height: ${heightPx}px;
-      overflow: hidden;
-      box-sizing: border-box;
-      border: ${borderWidth}px solid black;
-      background: white;
-      position: relative;
-    ">
-      <div style="
-        position: absolute;
-        top: 0; left: 0; right: 0; bottom: 0;
-        padding: ${marginPx}px;
-        box-sizing: border-box;
-        font-family: ${config.fontFamily};
-        font-size: ${config.bodyFontSizePt}pt;
-        line-height: ${config.lineHeight};
-        letter-spacing: ${(config.letterSpacingMm || 0) * PX_PER_CM * 0.1}px;
-        text-align: ${config.textAlign};
-        overflow: hidden;
-        color: black;
-      ">
-        <div class="af-header" style="
-          font-family: ${config.fontFamily};
-          font-size: ${config.headerFontSizePt}pt;
-          font-weight: 700;
-          text-align: center;
-          line-height: 1.2;
-          margin-bottom: 1.5pt;
-          word-break: break-word;
-        "></div>
-        <div class="af-subheader" style="
-          font-family: ${config.fontFamily};
-          font-size: ${config.subheaderFontSizePt}pt;
-          font-weight: 700;
-          text-align: center;
-          line-height: 1.2;
-          margin-bottom: 1.5pt;
-          word-break: break-word;
-        "></div>
-        <div class="af-body" style="word-break: break-word;"></div>
-      </div>
-    </div>
-  `;
+  async fits(config: NoticeConfig): Promise<boolean> {
+    flushSync(() => {
+      this.root.render(
+        createElement(NoticeCanvas, { config, zoomScale: 1, onOverflowStatusChange: noop, showMarginGuides: false }),
+      );
+    });
+    // Images (logo, inline images) must be decoded before their height counts.
+    const images = Array.from(this.container.querySelectorAll('img'));
+    await Promise.all(images.map((img) => (img.complete ? null : img.decode().catch(() => undefined))));
+    const content = this.container.querySelector('[data-notice-content="true"]') as HTMLElement | null;
+    return !content || (content.scrollHeight <= content.clientHeight + 1 && content.scrollWidth <= content.clientWidth + 1);
+  }
 
-  document.body.appendChild(container);
-
-  return {
-    el: container,
-    cleanup: () => {
-      if (container.parentNode) {
-        container.parentNode.removeChild(container);
-      }
-    },
-  };
+  dispose() {
+    this.root.unmount();
+    this.container.remove();
+  }
 }
 
-/**
- * Strip bold, underline and alignment tags for measurement purposes.
- */
-function stripFormatting(text: string): string {
-  return text
-    .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/\[(left|center|right|justify|u)\]/gi, '')
-    .replace(/\[\/(left|center|right|justify|u)\]/gi, '');
-}
+const noop = () => {};
 
 /**
  * Check if the text content fits within the given notice dimensions.
  */
 function fitsAtSize(
+  measurer: CanvasMeasurer,
   config: NoticeConfig,
   bodyPt: number,
   headerPt: number,
   subheaderPt: number,
   lineHeight: number,
-): boolean {
-  const { el, cleanup } = createMeasurementElement({
+): Promise<boolean> {
+  return measurer.fits({
     ...config,
     bodyFontSizePt: bodyPt,
+    tableFontSizePt: tableSizeFor(bodyPt, config),
     headerFontSizePt: headerPt,
     subheaderFontSizePt: subheaderPt,
     lineHeight,
   });
+}
 
-  const headerEl = el.querySelector('.af-header') as HTMLDivElement;
-  const subheaderEl = el.querySelector('.af-subheader') as HTMLDivElement;
-  const bodyEl = el.querySelector('.af-body') as HTMLDivElement;
-
-  if (headerEl) headerEl.textContent = config.headerTitle || '';
-  if (subheaderEl) subheaderEl.textContent = config.subheaderTitle || '';
-  if (bodyEl) bodyEl.textContent = stripFormatting(config.bodyText || '');
-
-  const innerContainer = el.firstElementChild as HTMLDivElement;
-  const contentArea = innerContainer?.firstElementChild as HTMLDivElement;
-  const isOverflowing = contentArea
-    ? contentArea.scrollHeight > contentArea.clientHeight + 1
-    : false;
-
-  cleanup();
-  return !isOverflowing;
+/**
+ * Table text scales with the body (same idea as the titles), so auto-fit can also
+ * resolve tables that are too wide or too tall. Range matches the "Tamaño de tabla" control.
+ */
+function tableSizeFor(bodyPt: number, originalConfig: NoticeConfig): number {
+  const ratio = getTableFontSizePt(originalConfig) / Math.max(0.1, originalConfig.bodyFontSizePt);
+  return clamp(Number((bodyPt * ratio).toFixed(2)), 3.5, 12);
 }
 
 /**
@@ -207,13 +156,26 @@ export async function calculateAutoFitFont(
 ): Promise<AutoFitResult> {
   // Ensure DOM is ready
   await new Promise((r) => requestAnimationFrame(r));
+  const measurer = new CanvasMeasurer();
+  try {
+    return await searchBestFit(measurer, config, availableSizes);
+  } finally {
+    measurer.dispose();
+  }
+}
+
+async function searchBestFit(
+  measurer: CanvasMeasurer,
+  config: NoticeConfig,
+  availableSizes: SizeOption[],
+): Promise<AutoFitResult> {
 
   const currentBody = config.bodyFontSizePt;
   const currentLineHeight = config.lineHeight;
   const { headerPt: currentHeader, subheaderPt: currentSubheader } = proportionalSizes(currentBody, config);
 
   // ── Step 0: Does it currently fit? ──
-  const currentFits = fitsAtSize(config, currentBody, currentHeader, currentSubheader, currentLineHeight);
+  const currentFits = await fitsAtSize(measurer, config, currentBody, currentHeader, currentSubheader, currentLineHeight);
 
   if (currentFits) {
     // Current fits — try to go slightly bigger for better readability
@@ -221,7 +183,7 @@ export async function calculateAutoFitFont(
 
     for (let tryBody = currentBody + 0.25; tryBody <= NEWSPAPER_LIMITS.bodyMax; tryBody += 0.25) {
       const { headerPt, subheaderPt } = proportionalSizes(tryBody, config);
-      if (fitsAtSize(config, tryBody, headerPt, subheaderPt, currentLineHeight)) {
+      if (await fitsAtSize(measurer, config, tryBody, headerPt, subheaderPt, currentLineHeight)) {
         bestBody = tryBody;
       } else {
         break;
@@ -234,6 +196,7 @@ export async function calculateAutoFitFont(
         changes: {
           bodyFontSizePt: Number(bestBody.toFixed(2)),
           headerFontSizePt: headerPt,
+          tableFontSizePt: tableSizeFor(bestBody, config),
           subheaderFontSizePt: subheaderPt,
           lineHeight: currentLineHeight,
         },
@@ -259,14 +222,14 @@ export async function calculateAutoFitFont(
     tryLH >= LINE_HEIGHT_RANGE.min;
     tryLH -= LINE_HEIGHT_RANGE.step
   ) {
-    if (fitsAtSize(config, currentBody, currentHeader, currentSubheader, Number(tryLH.toFixed(2)))) {
+    if (await fitsAtSize(measurer, config, currentBody, currentHeader, currentSubheader, Number(tryLH.toFixed(2)))) {
       bestLineHeight = Number(tryLH.toFixed(2));
       break;
     }
   }
 
   // Check if line height reduction was enough
-  if (fitsAtSize(config, currentBody, currentHeader, currentSubheader, bestLineHeight)) {
+  if (await fitsAtSize(measurer, config, currentBody, currentHeader, currentSubheader, bestLineHeight)) {
     return {
       changes: {
         lineHeight: bestLineHeight,
@@ -287,7 +250,7 @@ export async function calculateAutoFitFont(
     const { headerPt, subheaderPt } = proportionalSizes(tryBody, config);
 
     // Try with the best line height we found
-    if (fitsAtSize(config, tryBody, headerPt, subheaderPt, bestLineHeight)) {
+    if (await fitsAtSize(measurer, config, tryBody, headerPt, subheaderPt, bestLineHeight)) {
       bestBody = tryBody;
       bestHeader = headerPt;
       bestSubheader = subheaderPt;
@@ -301,7 +264,7 @@ export async function calculateAutoFitFont(
       tryLH >= LINE_HEIGHT_RANGE.min;
       tryLH -= LINE_HEIGHT_RANGE.step
     ) {
-      if (fitsAtSize(config, tryBody, headerPt, subheaderPt, Number(tryLH.toFixed(2)))) {
+      if (await fitsAtSize(measurer, config, tryBody, headerPt, subheaderPt, Number(tryLH.toFixed(2)))) {
         bestBody = tryBody;
         bestHeader = headerPt;
         bestSubheader = subheaderPt;
@@ -320,11 +283,17 @@ export async function calculateAutoFitFont(
     const parts: string[] = [];
     if (bodyDelta > 0.05) parts.push(`fuente de ${currentBody} pt a ${bestBody.toFixed(2)} pt`);
     if (lhDelta > 0.02) parts.push(`interlineado de ${currentLineHeight.toFixed(2)} a ${bestLineHeight.toFixed(2)}`);
+    if (/##table/.test(config.bodyText || '')) {
+      const tableBefore = getTableFontSizePt(config);
+      const tableAfter = tableSizeFor(bestBody, config);
+      if (Math.abs(tableBefore - tableAfter) > 0.05) parts.push(`tablas de ${tableBefore} pt a ${tableAfter} pt`);
+    }
 
     return {
       changes: {
         bodyFontSizePt: bestBody,
         headerFontSizePt: bestHeader,
+        tableFontSizePt: tableSizeFor(bestBody, config),
         subheaderFontSizePt: bestSubheader,
         lineHeight: bestLineHeight,
       },

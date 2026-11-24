@@ -1,6 +1,7 @@
 import { parseFormattedText, FormattedText } from '../utils/textFormatting';
 import React, { useRef, useEffect, useCallback } from 'react';
 import { BodyImage, NoticeConfig, OverflowStatus } from '../types';
+import { parseTableBlock, TABLE_BLOCK_SOURCE, type TableModel } from '../utils/tableMarkup';
 
 const PT_PER_CM = 28.3465;
 const PT_PER_MM = 2.83465;
@@ -14,133 +15,84 @@ interface NoticeCanvasProps {
   showMarginGuides: boolean;
 }
 
-/**
- * Parse body text with **bold** markdown and [align]...[/align] tags into React elements.
- */
-interface TableData {
-  headers: string[];
-  rows: string[][];
-}
-
-/**
- * Auto-detect separator and split a line into cells.
- * Priority: pipe (|) > tab (\t) > comma (,)
- */
-function splitTableRow(line: string, forceSeparator?: '|' | '\t' | ','): string[] {
-  const trimmed = line.trim();
-  if (!trimmed) return [];
-
-  // Auto-detect: check which separator appears most
-  if (!forceSeparator) {
-    const pipeCount = (trimmed.match(/\|/g) || []).length;
-    const tabCount = (trimmed.match(/\t/g) || []).length;
-    const commaCount = (trimmed.match(/,/g) || []).length;
-
-    if (pipeCount > 0 && pipeCount >= tabCount && pipeCount >= commaCount) {
-      forceSeparator = '|';
-    } else if (tabCount > 0 && tabCount >= commaCount) {
-      forceSeparator = '\t';
-    } else if (commaCount > 0) {
-      forceSeparator = ',';
-    } else {
-      // No separator found — single cell
-      return [trimmed];
-    }
-  }
-
-  // Split and trim
-  return trimmed.split(forceSeparator).map((cell) => cell.trim());
-}
-
-/**
- * Parse a ##table ... ##/table block into structured data.
- * Supports pipe (|), tab (\t), or comma (,) separators — auto-detected.
- * First row = headers, remaining rows = data.
- */
-function parseTableData(blockContent: string): TableData | null {
-  const normalized = blockContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const lines = normalized.split('\n').filter((l) => l.trim() !== '');
-  if (lines.length < 1) return null;
-
-  // Detect separator from the first non-empty line
-  const firstLine = lines[0].trim();
-  let sep: '|' | '\t' | ',' | undefined;
-  if (firstLine.includes('|')) sep = '|';
-  else if (firstLine.includes('\t')) sep = '\t';
-  else if (firstLine.includes(',')) sep = ',';
-
-  const headers = splitTableRow(lines[0], sep);
-  if (headers.length === 0) return null;
-
-  const rows: string[][] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cells = splitTableRow(lines[i], sep);
-    if (cells.length > 0) rows.push(cells);
-  }
-
-  return { headers, rows };
-}
-
-/**
- * Render a parsed table as a React element with press-appropriate styling.
- */
-function getTableFontSizePt(config: NoticeConfig): number {
+export function getTableFontSizePt(config: NoticeConfig): number {
   return config.tableFontSizePt ?? Number(Math.max(4, config.bodyFontSizePt * 0.85).toFixed(2));
 }
 
-function renderTable(data: TableData, fontFamily: string, tableFontSizePt: number): React.ReactNode {
-  const colCount = data.headers.length;
-  const cellPaddingH = 2;
-  const cellPaddingV = 1;
+/** Table rule width in points: thin but safe for newspaper presses (matches the funeral border). */
+export const TABLE_RULE_PT = 0.25;
+/**
+ * Chrome rounds any CSS border thinner than 1px up to 1px (0.75pt in the PDF), so table
+ * rules are painted with hard inset shadows instead, which keep their exact width:
+ * each cell draws its right and bottom rule, the table draws the top and left ones.
+ */
+const CELL_RULES = `inset -${TABLE_RULE_PT}pt 0 0 0 #000, inset 0 -${TABLE_RULE_PT}pt 0 0 #000`;
+const TABLE_RULES = `inset ${TABLE_RULE_PT}pt ${TABLE_RULE_PT}pt 0 0 #000`;
+/** Slightly more room above than below: caps and figures leave the descender space empty. */
+const CELL_PADDING = `0.7pt 2pt 0.45pt`;
+
+interface NoticeTableProps {
+  model: TableModel;
+  fontFamily: string;
+  fontSizePt: number;
+  /** Position of the table in the body, used to open it in the editor from the canvas. */
+  tableIndex?: number;
+}
+
+/**
+ * A ##table block as printed. Cells wrap between words instead of overflowing the
+ * notice; with auto table layout a cell only wraps when the table would not fit
+ * otherwise, so tables that already fit keep their previous look. A table whose
+ * words alone are wider than the notice is reported as horizontal overflow.
+ */
+export function NoticeTable({ model, fontFamily, fontSizePt, tableIndex }: NoticeTableProps) {
+  const [headerRow, ...bodyRows] = model.header ? model.rows : [undefined, ...model.rows];
+  const cellStyle = (column: number): React.CSSProperties => ({
+    boxShadow: CELL_RULES,
+    padding: CELL_PADDING,
+    textAlign: model.align[column] ?? 'center',
+    whiteSpace: 'normal',
+    // Keep words whole (column widths follow the longest word); a word only breaks
+    // when it cannot fit on a line by itself.
+    overflowWrap: 'break-word',
+    // The body wrapper uses word-break: break-word, which is inherited and would let
+    // columns shrink mid-word; tables must keep words whole.
+    wordBreak: 'normal',
+    verticalAlign: 'middle',
+  });
 
   return (
     <table
       data-notice-table="true"
+      data-edit-target={tableIndex === undefined ? undefined : 'table'}
+      data-table-index={tableIndex}
       style={{
-        width: 'auto',
+        width: model.width === 'full' ? '100%' : 'auto',
         maxWidth: '100%',
         borderCollapse: 'collapse',
         fontFamily,
-        fontSize: `${tableFontSizePt}pt`,
-        lineHeight: 1.15,
+        fontSize: `${fontSizePt}pt`,
+        lineHeight: 1.2,
         margin: 0,
         tableLayout: 'auto',
-        display: 'inline-table',
+        boxShadow: TABLE_RULES,
+        display: model.width === 'full' ? 'table' : 'inline-table',
       }}
     >
-      <thead>
-        <tr>
-          {data.headers.map((h, i) => (
-            <th
-              key={i}
-              style={{
-                border: '0.03px solid black',
-                padding: `${cellPaddingV}px ${cellPaddingH}px`,
-                textAlign: i === 0 ? 'left' : 'center',
-                fontWeight: 700,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
+      {headerRow && (
+        <thead>
+          <tr>
+            {headerRow.map((cell, column) => (
+              <th key={column} style={{ ...cellStyle(column), fontWeight: 700 }}>{cell}</th>
+            ))}
+          </tr>
+        </thead>
+      )}
       <tbody>
-        {data.rows.map((row, ri) => (
-          <tr key={ri}>
-            {Array.from({ length: colCount }, (_, ci) => (
-              <td
-                key={ci}
-                style={{
-                  padding: `${cellPaddingV}px ${cellPaddingH}px`,
-                  textAlign: ci === 0 ? 'left' : 'center',
-                  border: '0.03px solid black',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {row[ci] || ''}
-              </td>
+        {bodyRows.map((row, rowIndex) => (
+          <tr key={rowIndex}>
+            {row!.map((cell, column) => (
+              <td key={column} style={cellStyle(column)}>{cell}</td>
             ))}
           </tr>
         ))}
@@ -222,7 +174,8 @@ function parseBodyText(
     return renderNodes(parseFormattedText(chunk), keyPrefix);
   };
 
-  const blockRe = /##table[ \t]*\r?\n([\s\S]*?)##\/table|##image:([A-Za-z0-9_-]+)|##imagen:(\d+)/g;
+  const blockRe = new RegExp(`${TABLE_BLOCK_SOURCE}|##image:([A-Za-z0-9_-]+)|##imagen:(\\d+)`, 'g');
+  let tableIndex = 0;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -236,9 +189,9 @@ function parseBodyText(
       );
     }
 
-    if (match[1] !== undefined) {
-      const tableData = parseTableData(match[1]);
-      if (tableData) {
+    if (match[2] !== undefined) {
+      const tableModel = parseTableBlock(match[1], match[2]);
+      if (tableModel) {
         const hasTextBefore = text.slice(0, match.index).trim().length > 0;
         const hasTextAfter = text.slice(match.index + match[0].length).trim().length > 0;
         parts.push(
@@ -250,13 +203,13 @@ function parseBodyText(
               textAlign: 'center',
             }}
           >
-            {renderTable(tableData, fontFamily, tableFontSizePt)}
+            <NoticeTable model={tableModel} fontFamily={fontFamily} fontSizePt={tableFontSizePt} tableIndex={tableIndex++} />
           </div>,
         );
       }
     } else {
-      const imageId = match[2];
-      const imageSlot = match[3] ? parseInt(match[3], 10) : null;
+      const imageId = match[3];
+      const imageSlot = match[4] ? parseInt(match[4], 10) : null;
       const image = imageSlot
         ? bodyImages.find((img, index) => (img.slot || index + 1) === imageSlot)
         : bodyImages.find((img) => img.id === imageId);
@@ -271,6 +224,12 @@ function parseBodyText(
     }
 
     lastIndex = match.index + match[0].length;
+    // The line break after ##/table only ends the marker line; a table is already a block,
+    // so rendering that break would add a blank line below every table.
+    if (match[2] !== undefined) {
+      if (text.startsWith('\r\n', lastIndex)) lastIndex += 2;
+      else if (text.startsWith('\n', lastIndex)) lastIndex += 1;
+    }
   }
 
   if (lastIndex > 0) {
@@ -458,7 +417,7 @@ function getBoldFontList(fontFamily: string): string {
 /**
  * NoticeCanvas: Pure HTML/CSS notice renderer at exact physical dimensions.
  *
- * This replaces the Typst SVG pipeline. The notice is rendered as a styled
+ * The notice is rendered as a styled
  * HTML div that matches the exact cm dimensions, with proper typography,
  * text justification, logo placement, and border.
  */
@@ -476,6 +435,12 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
   const heightPx = config.size.heightCm * PX_PER_CM;
   const marginPx = (config.marginMm / 10) * PX_PER_CM;
 
+  // Callers usually pass an inline callback. Keep it in a ref so a new identity on each
+  // render does not re-trigger measurement (that caused a permanent render loop).
+  const onOverflowRef = useRef(onOverflowStatusChange);
+  onOverflowRef.current = onOverflowStatusChange;
+  const lastStatusKey = useRef<string | null>(null);
+
   // Measure overflow via DOM — measure the content area, not the outer container
   const measureOverflow = useCallback(() => {
     const el = contentRef.current || canvasRef.current;
@@ -483,8 +448,10 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
 
     const scrollH = el.scrollHeight;
     const clientH = el.clientHeight;
-    const isOverflowing = scrollH > clientH + 1; // 1px tolerance
     const overflowHeightPx = Math.max(0, scrollH - clientH);
+    // Horizontal overflow: e.g. a table whose words cannot fit the notice width.
+    const overflowWidthPx = Math.max(0, el.scrollWidth - el.clientWidth);
+    const isOverflowing = overflowHeightPx > 1 || overflowWidthPx > 1; // 1px tolerance
     const overflowHeightPt = overflowHeightPx * (72 / 96);
     const overflowPercentage = isOverflowing
       ? Math.round((overflowHeightPt / (config.size.heightCm * PT_PER_CM)) * 100)
@@ -493,13 +460,18 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
       ? Number((config.size.heightCm + overflowHeightPt / PT_PER_CM + 0.3).toFixed(1))
       : config.size.heightCm;
 
-    onOverflowStatusChange({
+    // Only notify when the result changes, so parents storing it in state don't re-render needlessly.
+    const statusKey = `${isOverflowing}|${overflowHeightPx}|${overflowWidthPx}|${overflowPercentage}|${recommendedHeightCm}`;
+    if (statusKey === lastStatusKey.current) return;
+    lastStatusKey.current = statusKey;
+    onOverflowRef.current({
       isOverflowing,
       overflowHeightPx,
+      overflowWidthPx,
       overflowPercentage,
       recommendedHeightCm,
     });
-  }, [config.size.heightCm, config.size.widthCm, onOverflowStatusChange]);
+  }, [config.size.heightCm, config.size.widthCm]);
 
   // Re-measure on every content/style change
   useEffect(() => {
@@ -554,6 +526,7 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
       titles.push(
         <div
           key="header"
+          data-edit-target="headerTitle"
           style={{
             fontFamily: getBoldFontList(config.fontFamily),
             fontSize: `${config.headerFontSizePt}pt`,
@@ -572,6 +545,7 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
       titles.push(
         <div
           key="subheader"
+          data-edit-target="subheaderTitle"
           style={{
             fontFamily: getBoldFontList(config.fontFamily),
             fontSize: `${config.subheaderFontSizePt}pt`,
@@ -611,7 +585,9 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
     return (
       <img
         src={config.logoUrl}
-        alt="Logo"            style={{
+        alt="Logo"
+        data-edit-target="logo"
+        style={{
               float: floatDir,
               width: `${logoWidthPx}px`,
               height: 'auto',
@@ -698,7 +674,7 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
             pointerEvents: 'none',
             zIndex: 20,
           }}
-          title="Guía de margen de seguridad (3 mm)"
+          title={`Guía de margen (${config.marginMm} mm)`}
         />
       )}
 
@@ -746,6 +722,7 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
             <img
               src={config.logoUrl!}
               alt="Logo"
+              data-edit-target="logo"
               style={{
                 width: `${logoWidthPx}px`,
                 height: 'auto',
@@ -769,6 +746,7 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
             <img
               src={config.logoUrl!}
               alt="Logo"
+              data-edit-target="logo"
               style={{
               width: `${logoWidthPx}px`,
               height: 'auto',
@@ -789,7 +767,7 @@ export const NoticeCanvas: React.FC<NoticeCanvasProps> = ({
         {/* Body text with optional side logo float */}
         <div style={{ position: 'relative' }}>
           {renderSideLogo()}
-          <div style={{ wordBreak: 'break-word' }}>
+          <div data-edit-target="bodyText" style={{ wordBreak: 'break-word' }}>
             {bodyContent}
           </div>
           {/* Body images */}

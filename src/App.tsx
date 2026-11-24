@@ -6,17 +6,16 @@ import { NoticeConfig, SizeOption, OverflowStatus } from './types';
 import { INITIAL_SIZES, SAMPLE_NOTICE_IMAGE, DEFAULT_NOTICE_CONFIG } from './data/samples';
 import { Header } from './components/Header';
 import { EditorPanel } from './components/EditorPanel';
-import { NoticePreview } from './components/NoticePreview';
+import { NoticePreview, type EditTarget } from './components/NoticePreview';
 import { NoticeCanvas } from './components/NoticeCanvas';
 import { generateNoticePDF, generateNoticePDFWithWeasyPrint } from './utils/pdfGenerator';
 import { calculateAutoFitFont } from './utils/autoFitAlgorithm';
-import { AlertTriangle, Download, FileText, Flower2, Loader2, PanelLeftClose, PanelLeftOpen, Trash2, Upload, X } from 'lucide-react';
-
-interface PrintRiskAnalysis {
-  hasRisk: boolean;
-  warnings: string[];
-  recommendedMode: 'preserve' | 'flatten';
-}
+import { SavedNoticesModal } from './components/SavedNoticesModal';
+import { GeneratedLogModal } from './components/GeneratedLogModal';
+import { GrayPdfConverterModal } from './components/GrayPdfConverterModal';
+import { downloadBlob } from './utils/download';
+import { useConfigHistory } from './hooks/useHistory';
+import { FileText, Flower2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 interface NoticeJsonPayload {
   schemaVersion: 1;
@@ -62,18 +61,20 @@ function mergeSizes(baseSizes: SizeOption[], extraSizes: SizeOption[]): SizeOpti
 export default function App() {
   const [funeralTemplate, setFuneralTemplate] = useState<SavedNotice | null>(null);
   const [section, setSection] = useState<'standard' | 'funeral'>('standard');
-  const [config, setConfig] = useState<NoticeConfig>(DEFAULT_NOTICE_CONFIG);
+  const {
+    config,
+    update: handleConfigChange,
+    replace: setConfig,
+    setSilently: setConfigWithoutHistory,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+  } = useConfigHistory(DEFAULT_NOTICE_CONFIG);
   const [sizes, setSizes] = useState<SizeOption[]>(INITIAL_SIZES);
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [isWeasyExporting, setIsWeasyExporting] = useState<boolean>(false);
   const [isGrayModalOpen, setIsGrayModalOpen] = useState<boolean>(false);
-  const [isConvertingGrayPdf, setIsConvertingGrayPdf] = useState<boolean>(false);
-  const [grayPdfFile, setGrayPdfFile] = useState<File | null>(null);
-  const [flattenGrayPdf, setFlattenGrayPdf] = useState<boolean>(true);
-  const [grayPdfProgress, setGrayPdfProgress] = useState<number>(0);
-  const [grayPdfProgressLabel, setGrayPdfProgressLabel] = useState<string>('');
-  const [isAnalyzingGrayPdf, setIsAnalyzingGrayPdf] = useState<boolean>(false);
-  const [grayPdfRisk, setGrayPdfRisk] = useState<PrintRiskAnalysis | null>(null);
   const [isEditorPanelCollapsed, setIsEditorPanelCollapsed] = useState<boolean>(false);
   const [savedNotices, setSavedNotices] = useState<SavedNotice[]>([]);
   const [isSavedNoticesOpen, setIsSavedNoticesOpen] = useState<boolean>(false);
@@ -169,7 +170,7 @@ export default function App() {
   // at zoom=1 — no sidebar, no header, no UI chrome.
   useEffect(() => {
     (window as any).__setNoticeConfig = (newConfig: NoticeConfig) => {
-      setConfig(newConfig);
+      setConfigWithoutHistory(newConfig);
     };
     (window as any).__setPdfExportMode = (mode: boolean) => {
       setPdfExportMode(mode);
@@ -197,14 +198,52 @@ export default function App() {
     }
   }, [pdfExportMode]);
 
+  // Undo / redo shortcuts for the legal notice editor. Controlled React inputs lose
+  // reliable native undo, so the app history handles it everywhere in that section.
+  useEffect(() => {
+    if (section !== 'standard' || pdfExportMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      // Inside dialogs (table editor, crop…) undo belongs to the dialog's own fields.
+      if ((event.target as HTMLElement | null)?.closest?.('[role="dialog"]')) return;
+      const key = event.key.toLowerCase();
+      if (key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        undo();
+      } else if ((key === 'z' && event.shiftKey) || key === 'y') {
+        event.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [section, pdfExportMode, undo, redo]);
+
+  const toastTimer = useRef<number | undefined>(undefined);
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
+    window.clearTimeout(toastTimer.current);
+    // Longer messages (errors) stay longer on screen.
+    toastTimer.current = window.setTimeout(() => setToastMessage(null), Math.min(9000, 3000 + msg.length * 40));
   };
 
-  const handleConfigChange = (updated: Partial<NoticeConfig>) => {
-    setConfig((prev) => ({ ...prev, ...updated }));
+  // Clicking an element on the canvas focuses the matching field in the side panel.
+  const [tableEditRequest, setTableEditRequest] = useState<{ index: number; nonce: number } | null>(null);
+  const handleEditTarget = (target: EditTarget, index?: number) => {
+    setIsEditorPanelCollapsed(false);
+    if (target === 'table') {
+      // The panel owns the table editor; it opens it for this table.
+      setTableEditRequest({ index: index ?? 0, nonce: Date.now() });
+      return;
+    }
+    window.setTimeout(() => {
+      const field = document.getElementById(`editor-${target}`);
+      if (!field) return;
+      field.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      field.focus({ preventScroll: true });
+    }, 0);
   };
+
 
   const persistCustomSizes = (nextSizes: SizeOption[]) => {
     const nextCustomSizes = nextSizes.filter((size) => size.isCustom);
@@ -289,6 +328,7 @@ export default function App() {
 
   const handleLoadGeneratedLogEntry = (entry: GeneratedLogEntry) => {
     ensureSizeAvailable(entry.config.size);
+    setSection('standard');
     setConfig(entry.config);
     setIsGeneratedLogOpen(false);
     showToast(`Aviso cargado desde historial: ${entry.title}`);
@@ -317,15 +357,7 @@ export default function App() {
       ]),
     ];
     const csv = rows.map((row) => row.map(escapeCsv).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `historial-avisos-${Date.now()}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `historial-avisos-${Date.now()}.csv`);
     showToast('Historial exportado como CSV.');
   };
 
@@ -360,15 +392,7 @@ export default function App() {
       },
       customSizes,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${filenameSafeName(exportName)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `${filenameSafeName(exportName)}.json`);
     showToast('Anuncio exportado como JSON.');
   };
 
@@ -418,14 +442,22 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const handleAddCustomSize = (newSize: SizeOption) => {
+  // Stable identity keeps the memoized (hidden) funeral workspace from re-rendering while typing.
+  // mutateLibrary only touches refs and state setters, so capturing it once is safe.
+  const handleSaveFuneralTemplate = useCallback(async (name: string, templateConfig: NoticeConfig) => {
+    const now = new Date().toISOString();
+    await mutateLibrary('/notices', 'POST', { id: `notice-${crypto.randomUUID()}`, name, config: templateConfig, createdAt: now, updatedAt: now });
+  }, []);
+
+  const handleAddCustomSize = useCallback((newSize: SizeOption) => {
     setSizes((prev) => {
       const nextSizes = [...prev, { ...newSize, isCustom: true }];
       persistCustomSizes(nextSizes);
       return nextSizes;
     });
     showToast(`Nuevo tamaño agregado: ${newSize.widthCm} x ${newSize.heightCm} cm`);
-  };
+  // Only uses state setters and refs, so a stable identity is safe.
+  }, []);
 
   const handleDeleteCustomSize = (id: string) => {
     setSizes((prev) => {
@@ -434,7 +466,7 @@ export default function App() {
       return nextSizes;
     });
     if (config.size.id === id) {
-      setConfig((prev) => ({ ...prev, size: INITIAL_SIZES[1] }));
+      handleConfigChange({ size: INITIAL_SIZES[1] });
     }
   };
 
@@ -446,122 +478,6 @@ export default function App() {
   const handleReset = () => {
     setConfig(DEFAULT_NOTICE_CONFIG);
     showToast('Formulario limpiado');
-  };
-
-  const resetGrayPdfModal = () => {
-    setIsGrayModalOpen(false);
-    setGrayPdfFile(null);
-    setFlattenGrayPdf(true);
-    setGrayPdfProgress(0);
-    setGrayPdfProgressLabel('');
-    setIsAnalyzingGrayPdf(false);
-    setGrayPdfRisk(null);
-  };
-
-  const analyzeGrayPdfRisk = async (file: File) => {
-    try {
-      setIsAnalyzingGrayPdf(true);
-      setGrayPdfRisk(null);
-
-      const response = await fetch('/api/pdf/analyze-print-risk', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/pdf',
-          'x-filename': encodeURIComponent(file.name),
-        },
-        body: file,
-      });
-
-      if (!response.ok) return;
-
-      const analysis = (await response.json()) as PrintRiskAnalysis;
-      setGrayPdfRisk(analysis);
-
-      if (analysis.recommendedMode === 'flatten') {
-        setFlattenGrayPdf(true);
-      }
-    } catch (err) {
-      console.warn('PDF risk analysis error:', err);
-    } finally {
-      setIsAnalyzingGrayPdf(false);
-    }
-  };
-
-  const handleConvertGrayPdf = async () => {
-    if (!grayPdfFile) {
-      showToast('Selecciona un PDF para convertir.');
-      return;
-    }
-
-    try {
-      setIsConvertingGrayPdf(true);
-      setGrayPdfProgress(12);
-      setGrayPdfProgressLabel('Preparando archivo...');
-      showToast('Convirtiendo PDF externo a grises con Ghostscript...');
-
-      window.setTimeout(() => {
-        setGrayPdfProgress((current) => Math.max(current, 35));
-        setGrayPdfProgressLabel('Aplicando perfil ICC...');
-      }, 300);
-
-      window.setTimeout(() => {
-        setGrayPdfProgress((current) => Math.max(current, 68));
-        setGrayPdfProgressLabel(flattenGrayPdf ? 'Acoplando transparencias a 1200 dpi...' : 'Preservando vectores y fuentes...');
-      }, 1200);
-
-      const response = await fetch('/api/pdf/convert-gray', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/pdf',
-          'x-filename': encodeURIComponent(grayPdfFile.name),
-          'x-gray-conversion-mode': flattenGrayPdf ? 'flatten' : 'preserve',
-        },
-        body: grayPdfFile,
-      });
-
-      if (!response.ok) {
-        let message = 'No se pudo convertir el PDF.';
-        try {
-          const body = await response.json();
-          message = body.error || message;
-        } catch {
-          message = await response.text();
-        }
-        throw new Error(message);
-      }
-
-      setGrayPdfProgress(90);
-      setGrayPdfProgressLabel('Preparando descarga...');
-
-      const blob = await response.blob();
-      const baseName = grayPdfFile.name.replace(/\.pdf$/i, '') || 'documento';
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${baseName}_K.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
-
-      setIsGrayModalOpen(false);
-      setGrayPdfFile(null);
-      setFlattenGrayPdf(true);
-      setGrayPdfProgress(100);
-      setGrayPdfProgressLabel('');
-      setGrayPdfRisk(null);
-      showToast('PDF convertido a canal K y descargado.');
-    } catch (err) {
-      console.error('Gray PDF conversion error:', err);
-      const message = err instanceof Error ? err.message : 'Reintenta con otro PDF.';
-      showToast(`Error convirtiendo PDF: ${message}`);
-    } finally {
-      setIsConvertingGrayPdf(false);
-      window.setTimeout(() => {
-        setGrayPdfProgress(0);
-        setGrayPdfProgressLabel('');
-      }, 500);
-    }
   };
 
   // Auto-fit: binary-searches for the largest body font size that fits the notice dimensions.
@@ -682,28 +598,29 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-screen bg-slate-100 text-slate-900 flex flex-col font-sans overflow-hidden">
-      <nav className="relative z-40 shrink-0 border-b border-slate-700 bg-slate-950 px-3 py-3 sm:px-5" aria-label="Tipo de aviso">
-        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-          <div className="w-full sm:w-auto">
-            <p className="mb-2 text-[10px] font-extrabold uppercase tracking-[0.16em] text-slate-400">Selecciona el tipo de aviso</p>
-            <div className="flex gap-2">
-              {([
-                { id: 'standard', label: 'Avisos legales', icon: FileText },
-                { id: 'funeral', label: 'Avisos funerarios', icon: Flower2 },
-              ] as const).map(({ id, label, icon: Icon }) => <button
-                key={id}
-                type="button"
-                aria-pressed={section === id}
-                onClick={() => setSection(id)}
-                className={`flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-extrabold transition-colors focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-300 sm:flex-none sm:px-5 sm:text-base ${section === id ? 'border-emerald-300 bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300/30' : 'border-slate-600 bg-slate-800 text-slate-200 hover:border-slate-400 hover:bg-slate-700'}`}
-              ><Icon className="h-5 w-5 shrink-0" /><span>{label}</span></button>)}
-            </div>
-          </div>
-          <p className="flex items-center gap-2 text-xs text-slate-300" role="status" aria-live="polite">
-            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" aria-hidden="true" />
-            Editando: <strong className="font-bold text-white">{section === 'standard' ? 'Avisos legales' : 'Avisos funerarios'}</strong>
-          </p>
+    <div className="h-screen w-screen bg-stone-100 text-stone-900 flex flex-col font-sans overflow-hidden">
+      <nav className="relative z-40 shrink-0 bg-stone-900 px-3 sm:px-5" aria-label="Tipo de aviso">
+        <div className="flex items-center gap-1" role="tablist">
+          {([
+            { id: 'standard', label: 'Avisos legales', icon: FileText },
+            { id: 'funeral', label: 'Avisos funerarios', icon: Flower2 },
+          ] as const).map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={section === id}
+              onClick={() => setSection(id)}
+              className={`relative flex min-h-11 flex-1 items-center justify-center gap-2 px-4 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-300 sm:flex-none ${
+                section === id
+                  ? 'text-white after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-accent-400'
+                  : 'text-stone-400 hover:text-stone-100'
+              }`}
+            >
+              <Icon className="h-4 w-4 shrink-0" />
+              <span>{label}</span>
+            </button>
+          ))}
         </div>
       </nav>
       <div className={section === 'funeral' ? 'hidden' : 'shrink-0'}>
@@ -711,7 +628,6 @@ export default function App() {
       <Header
         onLoadSample={handleLoadSample}
         onReset={handleReset}
-        onExportPdf={handleExportPdf}
         onExportWeasyPdf={handleExportWeasyPdf}
         onOpenGrayPdfConverter={() => setIsGrayModalOpen(true)}
         onSaveNotice={handleSaveNotice}
@@ -719,7 +635,6 @@ export default function App() {
         onOpenGeneratedLog={() => setIsGeneratedLogOpen(true)}
         onExportNoticeJson={() => handleExportNoticeJson()}
         onImportNoticeJson={() => noticeJsonInputRef.current?.click()}
-        isExporting={isExporting}
         isWeasyExporting={isWeasyExporting}
         isOverflowing={overflowStatus.isOverflowing}
       />
@@ -734,10 +649,7 @@ export default function App() {
 
       </div>
       <div className={section === 'funeral' ? 'flex flex-1 min-h-0 flex-col' : 'hidden'}>
-        <FuneralWorkspace loadedTemplate={funeralTemplate} sizes={sizes} onAddSize={handleAddCustomSize} templates={savedNotices} onSaveTemplate={async (name, templateConfig) => {
-          const now = new Date().toISOString();
-          await mutateLibrary('/notices', 'POST', { id: `notice-${crypto.randomUUID()}`, name, config: templateConfig, createdAt: now, updatedAt: now });
-        }} />
+        <FuneralWorkspace loadedTemplate={funeralTemplate} sizes={sizes} onAddSize={handleAddCustomSize} templates={savedNotices} onSaveTemplate={handleSaveFuneralTemplate} />
       </div>
       {/* Main Workspace */}
       <main className={`${section === 'funeral' ? 'hidden' : 'grid'} flex-1 min-h-0 w-full p-3 sm:p-4 grid-cols-1 lg:grid-cols-12 gap-4 overflow-y-auto lg:overflow-hidden`}>
@@ -747,7 +659,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsEditorPanelCollapsed(true)}
-              className="absolute right-3 top-3 z-20 flex h-8 w-8 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 shadow-sm transition-colors hover:bg-slate-100"
+              className="absolute right-2.5 top-2 z-20 flex h-8 w-8 items-center justify-center rounded-lg text-stone-500 transition-colors hover:bg-stone-100 hover:text-stone-800"
               title="Ocultar panel lateral"
             >
               <PanelLeftClose className="h-4 w-4" />
@@ -758,8 +670,7 @@ export default function App() {
               sizes={sizes}
               onAddCustomSize={handleAddCustomSize}
               onDeleteCustomSize={handleDeleteCustomSize}
-              onAutoFitFont={handleAutoFitFont}
-              isOverflowing={overflowStatus.isOverflowing}
+              tableEditRequest={tableEditRequest}
             />
           </div>
         )}
@@ -768,13 +679,13 @@ export default function App() {
         <div
           className={`order-1 lg:order-2 ${
             isEditorPanelCollapsed ? 'lg:col-span-12' : 'lg:col-span-7'
-          } h-[450px] sm:h-[550px] lg:h-full min-h-0 flex flex-col overflow-hidden relative`}
+          } h-[680px] sm:h-[620px] lg:h-full min-h-0 flex flex-col overflow-hidden relative`}
         >
           {isEditorPanelCollapsed && (
             <button
               type="button"
               onClick={() => setIsEditorPanelCollapsed(false)}
-              className="absolute left-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 shadow-md transition-colors hover:bg-slate-100"
+              className="absolute bottom-20 left-3 z-30 flex h-9 w-9 items-center justify-center rounded-lg border border-stone-300 bg-white text-stone-700 shadow-md transition-colors hover:bg-stone-100"
               title="Mostrar panel lateral"
             >
               <PanelLeftOpen className="h-4 w-4" />
@@ -789,328 +700,45 @@ export default function App() {
             availableSizes={sizes}
             onExportPdf={handleExportPdf}
             isExporting={isExporting}
+            onEditTarget={handleEditTarget}
+            onUndo={undo}
+            onRedo={redo}
+            canUndo={canUndo}
+            canRedo={canRedo}
           />
         </div>
       </main>
 
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 bg-slate-800 text-white text-xs font-semibold px-4 py-2.5 rounded-lg shadow-xl border border-slate-700 flex items-center gap-2 animate-bounce">
-          <span className="w-2 h-2 rounded-full bg-emerald-400" />
+        <div role="status" aria-live="polite" className="fixed bottom-24 right-5 z-50 flex max-w-sm items-start gap-2.5 rounded-lg bg-stone-900 px-4 py-3 text-sm text-white shadow-lg">
+          <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-accent-400" aria-hidden="true" />
           <span>{toastMessage}</span>
         </div>
       )}
 
       {isSavedNoticesOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[86vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-900 px-5 py-4 text-white">
-              <div className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-emerald-300" />
-                <div>
-                  <h2 className="text-sm font-extrabold uppercase tracking-wide">Anuncios Guardados</h2>
-                  <p className="text-xs text-slate-300">Biblioteca compartida para todos</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setIsSavedNoticesOpen(false)}
-                className="rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
-                title="Cerrar"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4">
-              {savedNotices.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
-                  <p className="text-sm font-bold text-slate-800">Aún no hay anuncios guardados.</p>
-                  <p className="mt-1 text-xs text-slate-500">Usa Guardar para conservar el anuncio actual y acceder desde cualquier PC.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {savedNotices.map((notice) => {
-                    const updatedAt = new Date(notice.updatedAt).toLocaleString('es-CO');
-                    return (
-                      <div key={notice.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <h3 className="truncate text-sm font-black text-slate-900">{notice.name}</h3>
-                            <p className="mt-1 text-xs font-semibold text-slate-500">
-                              {notice.config.size.widthCm} × {notice.config.size.heightCm} cm · {updatedAt}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => handleLoadSavedNotice(notice)}
-                              className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-slate-800"
-                            >
-                              Cargar
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleExportNoticeJson(notice)}
-                              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-300 bg-slate-50 text-slate-700 transition-colors hover:bg-slate-100"
-                              title="Exportar este anuncio"
-                            >
-                              <Download className="h-4 w-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteSavedNotice(notice.id)}
-                              className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-700 transition-colors hover:bg-rose-100"
-                              title="Eliminar este anuncio"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
-              <button
-                type="button"
-                onClick={() => noticeJsonInputRef.current?.click()}
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100"
-              >
-                <Upload className="h-3.5 w-3.5" />
-                Importar JSON
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsSavedNoticesOpen(false)}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-slate-800"
-              >
-                Cerrar
-              </button>
-            </div>
-          </div>
-        </div>
+        <SavedNoticesModal
+          notices={savedNotices}
+          onLoad={handleLoadSavedNotice}
+          onExport={handleExportNoticeJson}
+          onDelete={handleDeleteSavedNotice}
+          onImport={() => noticeJsonInputRef.current?.click()}
+          onClose={() => setIsSavedNoticesOpen(false)}
+        />
       )}
 
       {isGeneratedLogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-          <div className="flex max-h-[86vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-900 px-5 py-4 text-white">
-              <div className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-emerald-300" />
-                <div>
-                  <h2 className="text-sm font-extrabold uppercase tracking-wide">Historial de PDFs</h2>
-                  <p className="text-xs text-slate-300">Registro compartido de avisos generados</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setIsGeneratedLogOpen(false)}
-                className="rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
-                title="Cerrar"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4">
-              {generatedLog.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
-                  <p className="text-sm font-bold text-slate-800">Aún no hay PDFs registrados.</p>
-                  <p className="mt-1 text-xs text-slate-500">El historial se crea automáticamente cuando una exportación termina bien.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {generatedLog.map((entry) => {
-                    const generatedAt = new Date(entry.generatedAt).toLocaleString('es-CO');
-                    return (
-                      <div key={entry.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <h3 className="truncate text-sm font-black text-slate-900">{entry.title}</h3>
-                            <p className="mt-1 text-xs font-semibold text-slate-500">
-                              {entry.config.size.widthCm} × {entry.config.size.heightCm} cm · PDF tamaño real · {generatedAt}
-                            </p>
-                            <p className="mt-1 truncate text-xs text-slate-500">
-                              {entry.filename} · {entry.config.fontFamily} · cuerpo {entry.config.bodyFontSizePt} pt · inter {entry.config.lineHeight.toFixed(2)}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleLoadGeneratedLogEntry(entry)}
-                            className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-slate-800"
-                          >
-                            Cargar
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
-                <button
-                  type="button"
-                  onClick={handleClearGeneratedLog}
-                  disabled={generatedLog.length === 0}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-bold text-rose-700 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Borrar historial
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExportGeneratedLogCsv}
-                  disabled={generatedLog.length === 0}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  CSV
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsGeneratedLogOpen(false)}
-                  className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-slate-800"
-                >
-                  Cerrar
-                </button>
-            </div>
-          </div>
-        </div>
+        <GeneratedLogModal
+          entries={generatedLog}
+          onLoad={handleLoadGeneratedLogEntry}
+          onClear={handleClearGeneratedLog}
+          onExportCsv={handleExportGeneratedLogCsv}
+          onClose={() => setIsGeneratedLogOpen(false)}
+        />
       )}
 
-      {isGrayModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
-          <div className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-900 px-5 py-4 text-white">
-              <div className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-emerald-300" />
-                <div>
-                  <h2 className="text-sm font-extrabold uppercase tracking-wide">Convertir PDF a Grises</h2>
-                  <p className="text-xs text-slate-300">Ghostscript + ISOnewspaper26v4_gr.icc</p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  if (!isConvertingGrayPdf) {
-                    resetGrayPdfModal();
-                  }
-                }}
-                className="rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
-                disabled={isConvertingGrayPdf}
-                title="Cerrar"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4 px-5 py-5">
-              <label className="flex min-h-[150px] cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center transition-colors hover:border-emerald-400 hover:bg-emerald-50">
-                <Upload className="h-8 w-8 text-emerald-700" />
-                <div>
-                  <p className="text-sm font-bold text-slate-900">
-                    {grayPdfFile ? grayPdfFile.name : 'Seleccionar PDF'}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">El archivo se convertira a DeviceGray/K en PDF 1.3 para prensa</p>
-                </div>
-                <input
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  className="hidden"
-                  disabled={isConvertingGrayPdf}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0] || null;
-                    setGrayPdfFile(file);
-                    setFlattenGrayPdf(true);
-                    setGrayPdfRisk(null);
-                    if (file) {
-                      void analyzeGrayPdfRisk(file);
-                    }
-                  }}
-                />
-              </label>
-
-              {isAnalyzingGrayPdf && (
-                <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-900">
-                  <Loader2 className="h-4 w-4 animate-spin text-blue-700" />
-                  <span>Analizando transparencias, máscaras y efectos...</span>
-                </div>
-              )}
-
-              {grayPdfRisk?.hasRisk && (
-                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-xs text-amber-950">
-                  <div className="mb-2 flex items-center gap-2 font-extrabold">
-                    <AlertTriangle className="h-4 w-4 text-amber-700" />
-                    <span>Advertencia para RIP antiguo</span>
-                  </div>
-                  <div className="space-y-1">
-                    {grayPdfRisk.warnings.slice(0, 4).map((warning) => (
-                      <p key={warning}>{warning}</p>
-                    ))}
-                  </div>
-                  <p className="mt-2 font-semibold">Se recomienda acoplar transparencias antes de enviar a rotativa.</p>
-                </div>
-              )}
-
-              {isConvertingGrayPdf && (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3">
-                  <div className="mb-2 flex items-center justify-between gap-3 text-xs font-bold text-emerald-950">
-                    <span>{grayPdfProgressLabel || 'Procesando PDF...'}</span>
-                    <span>{Math.max(1, Math.min(99, grayPdfProgress))}%</span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-white ring-1 ring-emerald-200">
-                    <div
-                      className="h-full rounded-full bg-emerald-600 transition-all duration-500 ease-out"
-                      style={{ width: `${Math.max(6, Math.min(99, grayPdfProgress))}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-                Requiere el perfil ICC local ISOnewspaper26v4_gr.icc. En modo RIP antiguo genera PDF/X-1a:2001 sobre PDF 1.3 DeviceGray/K.
-              </div>
-
-              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3 text-xs text-slate-700 transition-colors hover:bg-slate-50">
-                <input
-                  type="checkbox"
-                  checked={flattenGrayPdf}
-                  disabled={isConvertingGrayPdf}
-                  onChange={(event) => setFlattenGrayPdf(event.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600 disabled:opacity-50"
-                />
-                <span>
-                  <span className="block font-bold text-slate-900">Acoplar transparencias para RIP antiguo</span>
-                  <span className="mt-0.5 block text-slate-500">Usa PDF 1.3 a 1200 dpi, acopla transparencias y evita PDF 1.7.</span>
-                </span>
-              </label>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-3">
-              <button
-                onClick={() => {
-                  resetGrayPdfModal();
-                }}
-                disabled={isConvertingGrayPdf}
-                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleConvertGrayPdf}
-                disabled={!grayPdfFile || isConvertingGrayPdf}
-                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Upload className="h-3.5 w-3.5" />
-                {isConvertingGrayPdf ? 'Convirtiendo...' : 'Convertir y descargar'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {isGrayModalOpen && <GrayPdfConverterModal onClose={() => setIsGrayModalOpen(false)} showToast={showToast} />}
     </div>
   );
 }

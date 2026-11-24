@@ -1,4 +1,5 @@
 import { NoticeConfig } from '../types';
+import { downloadBlob } from './download';
 
 export interface PDFExportOptions {
   config: NoticeConfig;
@@ -7,55 +8,53 @@ export interface PDFExportOptions {
   filename?: string;
 }
 
+/** Reads the server's error body once (JSON `{ error }` or plain text). */
+export async function readServerError(response: Response, fallback: string): Promise<string> {
+  const raw = await response.text().catch(() => '');
+  try {
+    return JSON.parse(raw).error || fallback;
+  } catch {
+    return raw.trim() || fallback;
+  }
+}
+
+async function requestPdf(
+  endpoint: string,
+  { config, filename }: PDFExportOptions,
+  defaultSuffix: string,
+  fallbackError: string,
+  offlineError: string,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config }),
+    });
+  } catch {
+    throw new Error(offlineError);
+  }
+
+  if (!response.ok) throw new Error(await readServerError(response, fallbackError));
+
+  const defaultFilename = `aviso_${config.size.widthCm}x${config.size.heightCm}cm_${Date.now()}${defaultSuffix}`;
+  downloadBlob(await response.blob(), filename || defaultFilename);
+}
+
 /**
  * Generates and downloads a press-quality vector PDF using the Puppeteer server endpoint.
  * Puppeteer opens the running app, injects the config, React renders the canvas,
  * and the server converts the result to DeviceGray/K with Ghostscript.
  */
-export async function generateNoticePDF(options: PDFExportOptions): Promise<void> {
-  const { config, filename } = options;
-
-  // Try Puppeteer endpoint first (vector, press quality)
-  try {
-    const response = await fetch('/api/pdf/render', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config }),
-    });
-
-    if (response.ok) {
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-
-      const widthCm = config.size.widthCm;
-      const heightCm = config.size.heightCm;
-      const defaultFilename = `aviso_${widthCm}x${heightCm}cm_${Date.now()}_K.pdf`;
-      a.download = filename || defaultFilename;
-
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
-      return;
-    }
-
-    let message = 'No se pudo generar el PDF.';
-    try {
-      const body = await response.json();
-      message = body.error || message;
-    } catch {
-      message = await response.text();
-    }
-    throw new Error(message);
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new Error('El servidor de PDF no está disponible; no se puede garantizar salida DeviceGray/K.');
-    }
-
-    throw error;
-  }
+export function generateNoticePDF(options: PDFExportOptions): Promise<void> {
+  return requestPdf(
+    '/api/pdf/render',
+    options,
+    '_K.pdf',
+    'No se pudo generar el PDF.',
+    'El servidor de PDF no está disponible; no se puede garantizar salida DeviceGray/K.',
+  );
 }
 
 /**
@@ -63,47 +62,12 @@ export async function generateNoticePDF(options: PDFExportOptions): Promise<void
  * WeasyPrint renders the layout, then the server runs Ghostscript to force and
  * verify DeviceGray/K output.
  */
-export async function generateNoticePDFWithWeasyPrint(options: PDFExportOptions): Promise<void> {
-  const { config, filename } = options;
-
-  try {
-    const response = await fetch('/api/pdf/render-weasyprint', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config }),
-    });
-
-    if (response.ok) {
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-
-      const widthCm = config.size.widthCm;
-      const heightCm = config.size.heightCm;
-      const defaultFilename = `aviso_${widthCm}x${heightCm}cm_${Date.now()}_K_weasyprint_gs.pdf`;
-      a.download = filename || defaultFilename;
-
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
-      return;
-    }
-
-    let message = 'No se pudo generar el PDF con WeasyPrint.';
-    try {
-      const body = await response.json();
-      message = body.error || message;
-    } catch {
-      message = await response.text();
-    }
-    throw new Error(message);
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new Error('No hay conexión con el servidor Express de PDF. Abre la app desde `npm run dev` o configura el proxy de Vite hacia el backend.');
-    }
-
-    throw error;
-  }
+export function generateNoticePDFWithWeasyPrint(options: PDFExportOptions): Promise<void> {
+  return requestPdf(
+    '/api/pdf/render-weasyprint',
+    options,
+    '_K_weasyprint_gs.pdf',
+    'No se pudo generar el PDF con WeasyPrint.',
+    'No hay conexión con el servidor Express de PDF. Abre la app desde `npm run dev` o configura el proxy de Vite hacia el backend.',
+  );
 }

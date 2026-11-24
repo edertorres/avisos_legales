@@ -78,9 +78,11 @@ export interface NoticeConfig {
   grayscaleLogo: boolean;
   logoPosition?: 'left' | 'right' | 'top-center';
   logoVerticalAlign?: 'body' | 'titles-top';
-  contrastMode: 'normal' | 'high-contrast';
+  /** @deprecated Unused; kept optional so older saved notices still load. */
+  contrastMode?: 'normal' | 'high-contrast';
   showMarginGuides: boolean;
-  headerAlign: 'center' | 'left' | 'right';
+  /** @deprecated Unused; titles are always centered. */
+  headerAlign?: 'center' | 'left' | 'right';
   boldKeywords: string[]; // keywords to auto-bold or detected from **text**
   bodyImages: BodyImage[]; // images uploaded for the body
 }
@@ -88,6 +90,8 @@ export interface NoticeConfig {
 export interface OverflowStatus {
   isOverflowing: boolean;
   overflowHeightPx: number;
+  /** Content wider than the notice (e.g. a table with long words), in px at scale 1. */
+  overflowWidthPx?: number;
   overflowPercentage: number;
   recommendedHeightCm: number;
 }
